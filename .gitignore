@@ -1,0 +1,34 @@
+# Local datasets are downloaded separately and never committed or submitted.
+/data/complex_urban/
+
+# Python environments and generated caches.
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editor and operating-system files.
+.vscode/
+.idea/
+.DS_Store
+
+# Local scratch files.
+*.log
+*.tmp
+
+# Local AI-agent instructions, settings, and working plans.
+AGENTS.md
+**/AGENTS.md
+CLAUDE.md
+**/CLAUDE.md
+.codex/
+.claude/
+.cursor/
+docs/work_plan.md
+**/*_plan.md
+**/*_plan.txt
+
+# Local copies of course requirements used as working reference.
+/docs/course_requirements/
