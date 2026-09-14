@@ -1,16 +1,18 @@
 # GPS-denied localization on Complex Urban Dataset
 
 Course capstone project for evaluating 2D vehicle localization without GPS. The
-baseline fuses wheel encoders and Xsens IMU in an EKF. Two extended configurations
-add stereo visual odometry and LiDAR odometry.
+baseline fuses wheel encoders and Xsens IMU in an EKF and includes NIS consistency
+checks. The next stage adds wheel-slip detection and fallback, followed by stereo
+visual odometry and LiDAR odometry.
 
 ## Planned experiments
 
 | Configuration | Measurements used by the estimator |
 |---|---|
-| Base | Wheel encoders + Xsens IMU |
-| Visual | Wheel encoders + Xsens IMU + stereo visual odometry |
-| Full | Wheel encoders + Xsens IMU + stereo visual odometry + LiDAR odometry |
+| Base | Wheel encoders + Xsens IMU + 2D EKF + NIS |
+| Slip-aware | Base + wheel-slip detection and fallback |
+| Visual | Slip-aware base + stereo visual odometry |
+| Full | Slip-aware base + stereo visual odometry + LiDAR odometry |
 
 VRS-GPS is reserved as the independent absolute position reference and is not
 used by the GPS-denied estimator. Position metrics are computed only at epochs
