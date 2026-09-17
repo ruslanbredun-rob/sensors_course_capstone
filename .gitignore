@@ -17,18 +17,3 @@ __pycache__/
 # Local scratch files.
 *.log
 *.tmp
-
-# Local AI-agent instructions, settings, and working plans.
-AGENTS.md
-**/AGENTS.md
-CLAUDE.md
-**/CLAUDE.md
-.codex/
-.claude/
-.cursor/
-docs/work_plan.md
-**/*_plan.md
-**/*_plan.txt
-
-# Local copies of course requirements used as working reference.
-/docs/course_requirements/

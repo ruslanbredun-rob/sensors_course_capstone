@@ -1,109 +1,96 @@
 # Архітектура GPS-denied локалізації
 
-## Статус і мета
+## Призначення та межі
 
-Це **запланована** архітектура. Станом на створення документа є дані, design
-document і каркас модулів; робочого фільтра, метрик і графіків ще немає.
-ДЗ 18 завершується працюючим wheel + IMU EKF, який виводить стан на кожному
-кроці. ДЗ 19 додає незалежну оцінку проти VRS-GPS, baseline, діагностику та
-графіки. Slip-aware, stereo VO і LiDAR odometry — наступні окремі розширення.
+Система оцінює плоский стан автомобіля за колісними енкодерами та IMU на
+послідовності `urban35`. Режим `base` реалізує прогноз EKF за IMU і корекцію
+за швидкістю коліс. Опція `--validate` після завершення EKF порівнює
+траєкторію з VRS-GPS. VRS не надходить до фільтра. Stereo VO, LiDAR odometry,
+slip detector і wheel-only baseline мають окремі точки розширення.
 
 ## Потік даних
 
 ```text
-urban35/sensor_data/* + calibration/*
-              |
-      dataset readers + validation
-              |
-     timestamp-ordered events (ns)
-          /          |          \
-       IMU        encoder     VO/LiDAR [пізніше]
-        |             |             |
-    predict      wheel update   pose update
-          \          |          /
-             2D EKF + NIS
-                  |
-        state(t), covariance(t), diagnostics
-                  |
-       result files + plots [ДЗ 19]
-                  ^
-                  |
-VRS-GPS valid fix --> frame/time alignment --> RMSE
-wheel-only baseline ---------------------------> comparison
+ПОТОЧНИЙ РЕЖИМ base
+encoder.csv + EncoderParameter.txt --> counts -> wheel speed --+
+                                                             |
+xsens_imu.csv + Vehicle2IMU.txt --> gyro z, accel x --> 2D EKF
+                                              predict       | update + NIS
+                                                            v
+                                        estimated_state.csv + run_summary.txt
+
+ЛИШЕ З --validate, ПІСЛЯ EKF
+vrs_gps.csv --> fix=4 + time match --> SE(2) alignment --> 2D ATE RMSE + plot
 ```
 
-VRS-GPS, FOG і `global_pose.csv` не входять до входів EKF. VRS є primary
-reference лише при `fix_state = 4`; FOG можна використати для secondary yaw
-check. `global_pose.csv` залежить від частини тих самих сенсорів, тому не є
+Без `--validate` режим `base` не читає `vrs_gps.csv`. Валідація бере готові
+оцінки IMU-епох; зворотного шляху від VRS до EKF немає.
+
+`main.py` приймає шляхи й режим. `src/pipeline.py` з'єднує readers,
+синхронізацію, EKF та запис результату. Формули EKF не залежать від CSV parser
+або формату вихідного файлу.
+
+## Модулі та власність стану
+
+| Модуль | Відповідальність |
+|---|---|
+| `src/config.py` | Шляхи до даних/результатів, шум моделі, NIS-поріг, допустимий часовий розрив |
+| `src/dataset.py` | Читання CSV без заголовків, перевірка кількості колонок і монотонності часу |
+| `src/wheel_odometry.py` | Калібрування енкодерів, різниця counts і швидкість коліс |
+| `src/synchronization.py` | Злиття потоків у часовому порядку |
+| `src/ekf.py` | Стан `x`, коваріація `P`, predict, wheel update і NIS |
+| `src/pipeline.py` | Порядок викликів і запис кожного стану |
+| `src/evaluation.py` | RTK-fix filtering, часові пари, жорстке SE(2) вирівнювання без зміни масштабу, RMSE |
+| `src/visualization.py` | Графік вирівняної траєкторії та похибки за часом |
+
+Тільки EKF змінює стан оцінювача. Readers повертають вимірювання у визначених
+одиницях; pipeline не виконує математичні операції фільтра. Контракт виходу
+містить timestamp у наносекундах, позицію в метрах, yaw у радіанах і швидкість
+у м/с.
+
+## Час і координатні кадри
+
+Потоки мають власні timestamps у наносекундах. Event loop обробляє їх за
+зростанням часу; за однакового timestamp спочатку обробляється IMU. Між
+вимірюваннями EKF використовує останнє IMU-прискорення й кутову швидкість.
+Некоректний порядок часу, відсутня calibration або розрив понад `max_dt_s`
+спричиняють явну помилку.
+
+Стан EKF: `[x, y, yaw, v, gyro_bias, accel_bias]`. Початковий локальний кадр
+має `(x=0, y=0, yaw=0)`; це не UTM і не абсолютний курс. Для `urban35`
+`Vehicle2IMU.txt` задає одиничну матрицю повороту. Перед порівнянням з
+VRS-GPS потрібні часові пари й узгоджений 2D кадр. Для `urban35`
+`Vehicle2VRS.txt` не має горизонтального lever arm; невідомі початок і
+початковий yaw прибираються лише на етапі offline оцінювання.
+
+Валідація використовує всі зіставлені епохи `fix_state=4` і одну жорстку
+SE(2) трансформацію для всієї траєкторії. Вона не підганяє масштаб і не
+коригує EKF. Через вирівнювання за всією послідовністю RMSE не є абсолютною
+похибкою позиції в реальному часі.
+
+## Відмови та розширення
+
+Wheel update обчислює інновацію й NIS; вимірювання вище порога відхиляється,
+а значення NIS і рішення записуються в CSV. Це перевірка окремого update,
+не детектор пробуксовування. Відсутній gyro-bias measurement означає
+накопичення похибки yaw і позиції.
+
+Wheel-only baseline має використовувати ті самі encoder measurements, але
+власний стан. Stereo VO і LiDAR odometry мають повертати timestamped
+relative motion та covariance після перевірки якості й перетворення кадру.
+Для майбутнього порівняння baseline та EKF треба використовувати ті самі
+valid VRS epochs і однакове правило вирівнювання. `global_pose.csv` не є
 незалежним ground truth.
 
-## Межі модулів
+## Конфігурації для порівняння
 
-| Модуль | Відповідальність | Вхід → вихід |
-|---|---|---|
-| `main.py` | CLI, вибір режиму та шляхів | аргументи → запуск pipeline |
-| `src/config.py` | конфігурація і перевірка шляхів | JSON/CLI → `RunConfig` |
-| `src/dataset.py` | читання CSV і calibration; перевірка колонок, одиниць і монотонності | файли → типізовані вимірювання |
-| `src/synchronization.py` | впорядкування подій за nanosecond timestamp, tolerance, пропуски | потоки → події |
-| `src/wheel_odometry.py` | counts → wheel speed та wheel-only baseline | encoder + calibration → швидкість/траєкторія |
-| `src/ekf.py` | стан і коваріація; predict, updates, NIS | sensor events → estimates |
-| `src/pipeline.py` | порядок викликів і режими E1–E4; не містить формул фільтра | config → results |
-| `src/evaluation.py` | valid VRS, кадри, часові пари, RMSE і improvement | estimates + baseline + VRS → metrics |
-| `src/visualization.py` | підписані trajectory/error/NIS графіки | results → PNG |
-
-Stereo та LiDAR frontends згодом мають повертати однаковий контракт відносного
-руху з timestamp і covariance, але їхні алгоритми залишаються окремими.
-Конфігурація вибирає режим; модулі оцінювання не читають її напряму.
-
-## Стан, кадри та час
-
-- EKF володіє станом `[x, y, yaw, v, gyro_bias, accel_bias]` і `P`. Модулі
-  readers не змінюють стан. Кути зберігаються в радіанах, відстані в метрах,
-  швидкості в м/с, timestamps — цілі наносекунди.
-- Локальний кадр автомобіля та світовий 2D кадр треба визначити з calibration
-  до реалізації формул. VRS дає projected координати, але їхню проєкцію, вісь
-  `x/y`, початок і lever arm треба перевірити до порівняння.
-- Event loop обробляє вимірювання за часом. IMU запускає predict; encoder
-  запускає update після перетворення counts. Кожний оброблений крок записує
-  timestamp і стан. Для VO/LiDAR застосовується timestamp кадру; пропущені
-  кадри не заповнюються за номером файлу.
-- Некоректний `dt`, не монотонний час, відсутній файл чи невідома схема CSV
-  мають давати явну помилку. Відсутній VO/LiDAR measurement пропускається,
-  і EKF продовжує на IMU + wheel.
-
-## Оцінювання та режими
-
-**E1 Base:** wheel + IMU EKF і NIS. **E2 Slip-aware:** E1 із детекцією
-пробуксовування та fallback. **E3 Visual:** E2 + stereo VO. **E4 Full:**
-E3 + LiDAR odometry. Wheel-only dead reckoning — окремий raw baseline для
-критерію ДЗ 19; E1–E4 порівнюються на однаковому наборі valid VRS епох.
-
-Перед RMSE оцінка й VRS приводяться до одного кадру та зіставляються за часом
-із фіксованою tolerance. Метрика охоплює всі valid reference епохи у часовому
-перетині, а не лише останню точку. Виводяться RMSE baseline, RMSE EKF і
-відносне покращення. Для консистентності записуються NIS та/або перевірка
-додатної визначеності `P`; невалі́дні updates рахуються окремо.
-
-## Точки розширення та ризики
-
-- Вибір `Q/R`, модель IMU і slip thresholds належать EKF/measurement policy,
-  а не CSV reader. Їхні значення мають бути в конфігурації після вимірювання
-  характеристик даних.
-- Важливий прихований зв'язок — calibration і координатні кадри. VO/LiDAR
-  relative pose не можна прямо додати до світового стану без transform і
-  коректної моделі вимірювання.
-- NIS gating може приховати погану модель, якщо просто відкидати більшість
-  updates; треба зберігати частку прийнятих вимірювань та інновації.
-- Природне wheel slip у датасеті не розмічене. Для перевірки detector потрібна
-  контрольована ін'єкція похибки й окрема оцінка false positives на вихідних
-  даних.
-
-## Артефакти фаз
-
-| Фаза | Мінімальний результат |
+| Етап | Сенсорні обмеження та обробка |
 |---|---|
-| ДЗ 18 | `python main.py` читає IMU + encoder, синхронізує, реально змінює EKF і виводить стан; `requirements.txt` та README відповідають запуску |
-| ДЗ 19 | `python main.py --mode all` відтворює baseline/EKF, RMSE на valid VRS, consistency diagnostics і PNG trajectory/error; слайди PDF готуються до захисту |
+| E1 Base | IMU predict + wheel-speed update; VRS лише для оцінювання |
+| E2 Kinematics + slip | E1 + колісна оцінка кутової швидкості `(v_right - v_left) / wheel_base`; slip flag послаблює або відкидає wheel updates |
+| E3 Visual | E2 + відносний рух зі stereo visual odometry |
+| E4 Full | E3 + відносний рух із LiDAR scan matching |
 
-Архів здачі містить код, інструкції та результати. Датасет і його архіви не
-включаються.
+Wheel-only odometry є окремим baseline, а не входом EKF. Для E1–E4 та baseline
+порівнюються RMSE на однакових valid VRS epochs, похибка за часом і частка
+відхилених вимірювань. Слайди захисту готуються за результатами цих порівнянь.
