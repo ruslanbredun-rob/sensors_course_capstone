@@ -16,6 +16,13 @@ class RunConfig:
     output: Path
     reference_fix_state: int
     reference_tolerance_ns: int
+    wheel_speed_std_m_s: float
+    gyro_std_rad_s: float
+    accel_std_m_s2: float
+    gyro_bias_walk_rad_s_sqrt_s: float
+    accel_bias_walk_m_s2_sqrt_s: float
+    wheel_nis_threshold: float
+    max_dt_s: float
 
 
 def load_config(
@@ -28,9 +35,29 @@ def load_config(
         path = Path(value).expanduser()
         return path.resolve() if path.is_absolute() else (PROJECT_ROOT / path).resolve()
 
+    positive = (
+        "wheel_speed_std_m_s",
+        "gyro_std_rad_s",
+        "accel_std_m_s2",
+        "gyro_bias_walk_rad_s_sqrt_s",
+        "accel_bias_walk_m_s2_sqrt_s",
+        "wheel_nis_threshold",
+        "max_dt_s",
+    )
+    for key in positive:
+        if float(values[key]) <= 0:
+            raise ValueError(f"{config_path}: {key} must be positive")
+
     return RunConfig(
         dataset=resolve(dataset or values["dataset"]),
         output=resolve(output or values["output"]),
         reference_fix_state=int(values["reference_fix_state"]),
         reference_tolerance_ns=int(values["reference_tolerance_ms"] * 1_000_000),
+        wheel_speed_std_m_s=float(values["wheel_speed_std_m_s"]),
+        gyro_std_rad_s=float(values["gyro_std_rad_s"]),
+        accel_std_m_s2=float(values["accel_std_m_s2"]),
+        gyro_bias_walk_rad_s_sqrt_s=float(values["gyro_bias_walk_rad_s_sqrt_s"]),
+        accel_bias_walk_m_s2_sqrt_s=float(values["accel_bias_walk_m_s2_sqrt_s"]),
+        wheel_nis_threshold=float(values["wheel_nis_threshold"]),
+        max_dt_s=float(values["max_dt_s"]),
     )

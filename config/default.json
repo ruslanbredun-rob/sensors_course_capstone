@@ -2,5 +2,12 @@
   "dataset": "data/complex_urban/urban35",
   "output": "results",
   "reference_fix_state": 4,
-  "reference_tolerance_ms": 50
+  "reference_tolerance_ms": 50,
+  "wheel_speed_std_m_s": 0.5,
+  "gyro_std_rad_s": 0.02,
+  "accel_std_m_s2": 0.5,
+  "gyro_bias_walk_rad_s_sqrt_s": 0.0001,
+  "accel_bias_walk_m_s2_sqrt_s": 0.01,
+  "wheel_nis_threshold": 3.841,
+  "max_dt_s": 0.1
 }

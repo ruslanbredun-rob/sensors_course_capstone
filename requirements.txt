@@ -1,2 +1,1 @@
-# Dependencies will be added when the EKF and plots are implemented.
-# Python standard library is sufficient for the current scaffold.
+numpy>=1.24,<3

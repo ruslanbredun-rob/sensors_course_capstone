@@ -1,4 +1,4 @@
-"""Entry point for the planned Complex Urban localization pipeline."""
+"""Run the Complex Urban wheel + IMU localization prototype."""
 
 from __future__ import annotations
 
@@ -23,9 +23,16 @@ def main() -> None:
         choices=("base", "slip", "visual", "full", "all"),
         default="base",
     )
+    parser.add_argument(
+        "--max-events",
+        type=int,
+        help="Process only this many timestamp-ordered events (for inspection)",
+    )
     args = parser.parse_args()
+    if args.max_events is not None and args.max_events <= 0:
+        parser.error("--max-events must be positive")
     config = load_config(args.config, dataset=args.dataset, output=args.output)
-    run(config, args.mode)
+    run(config, args.mode, max_events=args.max_events)
 
 
 if __name__ == "__main__":
