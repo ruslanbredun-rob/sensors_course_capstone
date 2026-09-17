@@ -66,5 +66,25 @@ def read_imu(dataset: Path) -> Iterator[ImuSample]:
 
 
 def read_vrs_reference(dataset: Path) -> Iterator[PositionReference]:
-    """Reserved for independent validation."""
-    raise NotImplementedError("VRS validation is not implemented")
+    """Read UTM easting/northing (columns 3/4) and fix state (column 6)."""
+    path = dataset / "sensor_data" / "vrs_gps.csv"
+    previous_ns = -1
+    with path.open(newline="", encoding="utf-8") as stream:
+        for line_number, row in enumerate(csv.reader(stream), start=1):
+            if len(row) not in (17, 18):
+                raise ValueError(
+                    f"{path}:{line_number}: expected 17 or 18 columns, got {len(row)}"
+                )
+            try:
+                timestamp_ns = int(row[0])
+                easting_m = float(row[3])
+                northing_m = float(row[4])
+                fix_state = int(row[6])
+            except ValueError as exc:
+                raise ValueError(f"{path}:{line_number}: invalid VRS value") from exc
+            if timestamp_ns <= previous_ns:
+                raise ValueError(f"{path}:{line_number}: timestamp is not increasing")
+            if not math.isfinite(easting_m) or not math.isfinite(northing_m):
+                raise ValueError(f"{path}:{line_number}: non-finite VRS position")
+            previous_ns = timestamp_ns
+            yield PositionReference(timestamp_ns, easting_m, northing_m, fix_state)

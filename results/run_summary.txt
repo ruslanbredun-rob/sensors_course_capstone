@@ -1,0 +1,8 @@
+Base: IMU=17388, wheel=17387, wheel_rejected=4
+Final estimated state: t=1544686435383664234, x=3208.900 m, y=20.808 m, yaw=0.03763 rad, v=19.691 m/s
+State at every processed event: estimated_state.csv
+Frame: local origin (0, 0), initial yaw=0.
+VRS fix=4: 169/169 epochs matched within 50 ms
+2D ATE RMSE after SE(2) alignment (no scale): 38.441 m
+Median=33.227 m, P95=72.350 m, final=86.024 m
+Validation files: validation_pairs.csv, trajectory_validation.png

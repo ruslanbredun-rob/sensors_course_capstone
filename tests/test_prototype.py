@@ -7,14 +7,61 @@ import unittest
 from pathlib import Path
 
 from src.config import load_config
-from src.dataset import read_imu
+from src.dataset import read_imu, read_vrs_reference
 from src.ekf import VehicleEKF
-from src.models import EncoderSample, ImuSample, WheelMeasurement
+from src.evaluation import evaluate_position
+from src.models import EncoderSample, Estimate, ImuSample, PositionReference, WheelMeasurement
 from src.synchronization import ordered_events
 from src.wheel_odometry import wheel_measurements
 
 
 class PrototypeTests(unittest.TestCase):
+    def test_vrs_reader_uses_utm_and_fix_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sensor_dir = Path(directory) / "sensor_data"
+            sensor_dir.mkdir()
+            row = ["0"] * 18
+            row[0], row[3], row[4], row[6] = "1000000000", "325285.5", "4150987.25", "4"
+            (sensor_dir / "vrs_gps.csv").write_text(
+                ",".join(row) + "\n", encoding="utf-8"
+            )
+            sample = next(read_vrs_reference(Path(directory)))
+            self.assertEqual((sample.x_m, sample.y_m, sample.fix_state), (325285.5, 4150987.25, 4))
+
+    def test_se2_validation_excludes_float_fixes_and_never_fits_scale(self) -> None:
+        xy = [(0, 0), (1, 0), (1, 1), (2, 1), (2, 2)]
+        states = [
+            Estimate(index * 1_000_000_000, x, y, 0.0, 1.0)
+            for index, (x, y) in enumerate(xy)
+        ]
+        reference = [
+            PositionReference(
+                index * 1_000_000_000 + 2_000_000,
+                10.0 - y,
+                20.0 + x,
+                5 if index == 2 else 4,
+            )
+            for index, (x, y) in enumerate(xy)
+        ]
+        result = evaluate_position(
+            states, reference, valid_fix_state=4, tolerance_ns=5_000_000
+        )
+        self.assertEqual((result.valid_fix_epochs, result.matched_epochs), (4, 4))
+        self.assertLess(result.rmse_m, 1e-10)
+        scaled = [
+            PositionReference(
+                sample.timestamp_ns,
+                10 + 2 * (sample.x_m - 10),
+                20 + 2 * (sample.y_m - 20),
+                sample.fix_state,
+            )
+            for sample in reference
+        ]
+        scaled_result = evaluate_position(
+            states, scaled, valid_fix_state=4, tolerance_ns=5_000_000
+        )
+        self.assertGreater(scaled_result.rmse_m, 0.5)
+
     def test_imu_columns_are_gyro_z_and_accel_x(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             sensor_dir = Path(directory) / "sensor_data"

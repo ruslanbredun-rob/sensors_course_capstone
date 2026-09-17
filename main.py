@@ -28,11 +28,16 @@ def main() -> None:
         type=int,
         help="Process only this many timestamp-ordered events (for inspection)",
     )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Evaluate the output trajectory against valid VRS-GPS fixes",
+    )
     args = parser.parse_args()
     if args.max_events is not None and args.max_events <= 0:
         parser.error("--max-events must be positive")
     config = load_config(args.config, dataset=args.dataset, output=args.output)
-    run(config, args.mode, max_events=args.max_events)
+    run(config, args.mode, max_events=args.max_events, validate=args.validate)
 
 
 if __name__ == "__main__":
