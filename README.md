@@ -1,35 +1,53 @@
-# GPS-denied localization on Complex Urban Dataset
+# GPS-denied vehicle localization
 
-Course capstone project for evaluating 2D vehicle localization without GPS. The
-baseline fuses wheel encoders and Xsens IMU in an EKF and includes NIS consistency
-checks. The next stage adds wheel-slip detection and fallback, followed by stereo
-visual odometry and LiDAR odometry.
+Course capstone based on the Complex Urban Dataset, sequence `urban35`. The
+planned estimator fuses wheel encoders and Xsens IMU in a 2D EKF. VRS-GPS is
+reserved for independent evaluation and is never used as an estimator input.
 
-## Planned experiments
+**Current status:** repository structure and implementation contracts only.
+`python main.py` currently stops with an explicit `NotImplementedError`. It
+does not yet satisfy homework 18 or 19.
 
-| Configuration | Measurements used by the estimator |
-|---|---|
-| Base | Wheel encoders + Xsens IMU + 2D EKF + NIS |
-| Slip-aware | Base + wheel-slip detection and fallback |
-| Visual | Slip-aware base + stereo visual odometry |
-| Full | Slip-aware base + stereo visual odometry + LiDAR odometry |
+## Dataset
 
-VRS-GPS is reserved as the independent absolute position reference and is not
-used by the GPS-denied estimator. Position metrics are computed only at epochs
-with a valid RTK fix. FOG and `global_pose.csv` may be used for secondary analysis;
-`global_pose.csv` is not treated as independent ground truth.
+| Source | Approximate size | Download | Local location |
+|---|---:|---|---|
+| Complex Urban Dataset `urban35` | about 5.5 GB extracted | [official dataset page](https://sites.google.com/view/complex-urban-dataset) | `data/complex_urban/urban35/` |
 
-## Repository layout
+The dataset is not included in the course submission ZIP. See
+[data/README.md](data/README.md) for the expected directories and known missing
+frames.
 
-```text
-config/                    experiment and dataset configuration
-data/                      local dataset and download instructions
-docs/design_document.md    homework 17 working document
-docs/course_requirements/  local copies of homework 17-20 instructions
-src/                       localization and evaluation modules
-results/                   generated metrics and plots
-slides/                    defense presentation
+## Planned run
+
+```bash
+python -m pip install -r requirements.txt
+python main.py
 ```
 
-The implementation and reproducible run command will be added during homework 18.
-See `data/README.md` for the local dataset layout.
+The default mode is `base` (homework 18). Other planned modes are `slip`,
+`visual`, `full`, and `all` (homework 19). `--dataset` and `--output`
+override repository-relative paths from `config/default.json`.
+
+Once implemented, Base will print or save every estimated state. The final
+pipeline will print baseline and fused RMSE/ATE in metres and save trajectory
+and error plots under `results/`. These are planned outputs, not current
+results.
+
+## Project map
+
+| Path | Responsibility |
+|---|---|
+| `main.py`, `config/` | CLI and explicit run configuration |
+| `src/dataset.py`, `src/synchronization.py` | sensor input and timestamps |
+| `src/wheel_odometry.py`, `src/ekf.py` | baseline, prediction and updates |
+| `src/pipeline.py` | mode orchestration |
+| `src/evaluation.py`, `src/visualization.py` | homework 19 metrics and plots |
+| `docs/design_document.md` | homework 17 design |
+| `docs/architecture.md` | module boundaries, data/control flow and risks |
+| `docs/roadmap.md` | implementation order and validation gates |
+| `slides/` | defense PDF, prepared after measured results exist |
+
+The immediate implementation target is the wheel + IMU Base pipeline. Column
+order, physical units, vehicle axes and VRS frame must be confirmed before
+writing the reader and EKF formulas.

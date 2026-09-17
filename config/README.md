@@ -1,4 +1,6 @@
 # Configuration
 
-Dataset-relative paths, synchronization tolerances, sensor noise parameters, EKF
-noise matrices, and experiment sensor combinations will be defined here.
+`default.json` contains only dataset/output paths and reference matching
+policy. Paths are relative to the project root unless overridden with
+`--dataset` or `--output`. EKF noise, sensor gates and calibration values
+will be added after the data schema and units are confirmed.

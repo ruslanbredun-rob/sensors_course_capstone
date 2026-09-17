@@ -1,0 +1,6 @@
+{
+  "dataset": "data/complex_urban/urban35",
+  "output": "results",
+  "reference_fix_state": 4,
+  "reference_tolerance_ms": 50
+}
