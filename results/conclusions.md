@@ -1,47 +1,160 @@
-# Висновки ДЗ 18–19
+# Результати та висновки ДЗ 18–19
 
-## Результати на `urban35`
+## Умови порівняння
 
-| Конфігурація | RMSE, м | Median, м | P95, м |
-|---|---:|---:|---:|
-| E1 INS baseline (IMU + wheel) | 4.153 | 3.104 | 7.024 |
-| E2 kinematics + slip | 3.788 | 3.259 | 5.958 |
-| E2 + stereo VO | 3.788 | 3.262 | 5.953 |
-| E2 + LiDAR (no camera) | 3.788 | 3.259 | 5.958 |
-| E2 + stereo VO + LiDAR | 3.788 | 3.262 | 5.953 |
+VRS-GPS не надходить у EKF. Для оцінки беруться тільки `fix_state=4`, VRS
+epochs зіставляються зі state за timestamp у межах 50 мс.
 
-Найкращий режим — `visual`: 3.788 м RMSE. Покращення відносно E1 Wheel+IMU становить 8.8%.
-RMSE пораховано по 169 VRS epochs уздовж траєкторії 3215 м.
+Primary metric — global rigid SE(2) ATE без scale fit. Окремо рахується start
+anchored error: yaw береться з того самого SE(2) fit, але translation суміщає
+перші точки. На trajectory plots використано start anchored coordinates, тому
+початок estimate та reference збігається.
 
-## Наш шлях обробки даних
+| Характеристика | `urban35` | `urban39` |
+|---|---:|---:|
+| Тривалість | 173.9 с | 1866.7 с |
+| Encoder samples | 17 388 | 186 675 |
+| IMU samples | 17 388 | 186 682 |
+| Валідні RTK epochs | 169 | 314 |
+| Polyline по valid RTK epochs | 3215 м | 5577 м |
+| Повна довжина sequence | ≈3.2 км | ≈11.1 км |
 
-1. `encoder.csv` і `xsens_imu.csv` читаються потоково з перевіркою кількості колонок, SI units і строго зростаючих nanosecond timestamps. Обидва потоки мають близько 100 Hz, тому жоден із них не є низькочастотною зовнішньою поправкою.
-2. Encoder counts через resolution, діаметри коліс і фактичний `dt` перетворюються на left/right speed, лінійну швидкість та differential-drive course constraint; `x,y` інтегрує EKF.
-3. IMU gyro `z` і acceleration `x` виконують high-rate EKF prediction: кутова швидкість поширює orientation/yaw, прискорення — speed. IMU-only trajectory не використовується, бо інтегрування acceleration без надійної початкової лінійної швидкості швидко накопичує drift.
-4. E1 Base завжди використовує обидва комплементарні джерела: Wheel + IMU. Wheel update коригує speed і gyro bias; EKF записує `x, y, yaw, speed` після кожного IMU step.
-5. E2 додає wheel/IMU disagreement detector. Під час slip wheel correction пропускається, а IMU prediction продовжується.
-6. Stereo frontend ректифікує пари, знаходить ORB matches, виконує RANSAC essential matrix і відновлює metric scale зі disparity. LiDAR frontend переводить VLP-16 points у vehicle frame, voxelizes їх та оцінює increment через 2D ICP.
-7. Health manager використовує VO лише у degraded wheel interval. LiDAR є другим fallback, якщо немає недавньої якісної VO correction. Низька quality або NIS вище gate залишають стан попереднього етапу.
-8. `vrs_gps.csv` не читається estimator-ом. Після завершення run valid RTK epochs зіставляються за часом, траєкторії один раз вирівнюються rigid SE(2) без scale fit, після чого рахується ATE.
+`urban35` — короткий майже прямий маршрут. `urban39` триває понад 31 хвилину
+і містить багато поворотів та петель.
 
-## Консистентність і межі
+## Результати `urban35`
 
-Для `full` wheel-speed NIS нижче порога 3.841 у 99.98% з 17367 перевірених updates; wheel-yaw NIS нижче порога 6.635 у 99.79% з 17367 updates. Поточна модель шуму консервативна.
+| Конфігурація | Global RMSE, м | Median, м | P95, м | Start RMSE, м |
+|---|---:|---:|---:|---:|
+| E1 IMU + wheel | 4.153 | 3.104 | 7.024 | 7.731 |
+| E2 kinematics + slip | **3.788** | 3.259 | 5.958 | **7.119** |
+| E2 + stereo VO | 3.788 | 3.259 | 5.958 | 7.119 |
+| E2 + LiDAR | 3.788 | 3.259 | 5.958 | 7.119 |
+| E2 + stereo VO + LiDAR | 3.788 | 3.259 | 5.958 | 7.119 |
 
-VRS-GPS не надходить у EKF. Він використаний після оцінювання стану для часових пар, одного SE(2) вирівнювання без зміни масштабу та ATE по всій траєкторії.
+![Траєкторії urban35](urban35/screenshots/trajectory_comparison.png)
 
-Strict health gating не дозволив VO або LiDAR погіршити E2. На звичайній послідовності використано VO: 1/184 corrections; LiDAR без камер: 0/27 corrections. Frontends повністю обробили дані, але estimator приймав correction лише під час degraded wheel interval.
+E2 знижує global RMSE на 8.8%. Stereo frontend прийняв 184/868 пар, LiDAR —
+27/1723. Coverage становить 21.2% та 1.6%, нижче health threshold 30%, тому
+розріджені relative transforms не подаються у EKF. Через це VO/LO modes
+зберігають результат E2. На майже прямому маршруті це очікувано: Wheel+IMU вже
+добре відтворює форму траєкторії, а frontends не дають безперервного constraint.
 
-## Чому VO та LiDAR майже не покращили результат
+## Результати `urban39`
 
-Саме `urban35` є легкою послідовністю для Wheel+IMU: обидва потоки працюють приблизно зі 100 Hz, рух переважно плавний, а slip detector був активний лише для 20 із 17387 wheel samples (0.12%). Тому E2 вже добре відтворює форму траєкторії, а зовнішнім сенсорам майже нічого виправляти.
+| Конфігурація | Global RMSE, м | Median, м | P95, м | Start RMSE, м |
+|---|---:|---:|---:|---:|
+| E1 IMU + wheel | 188.456 | 108.539 | 348.793 | 397.011 |
+| E2 kinematics + slip | 188.471 | 108.484 | 348.879 | 397.094 |
+| E2 + stereo VO | 197.477 | 110.616 | 367.559 | 417.832 |
+| E2 + LiDAR | 90.789 | 57.316 | 168.823 | **168.629** |
+| E2 + stereo VO + LiDAR | **90.690** | **57.029** | **168.689** | 168.668 |
 
-Реалізовані frontends не є повноцінними VIO/LIO. Stereo VO не оптимізує features разом з IMU state, а LiDAR ICP не робить IMU deskew rolling scan. При постійному fusion їхні noisy increments трохи погіршували RMSE, тому health manager використовує їх лише як fallback. На цій послідовності це означає практично однаковий результат E2, E2+VO та E2+LiDAR.
+![Траєкторії urban39](urban39/screenshots/trajectory_comparison.png)
 
-## Порівняння з VIO та LIO
+LiDAR-only зменшує global RMSE на 51.8%, full mode — на 51.9%. LiDAR
+frontend прийняв 18022/18506 increments, або 97.4%, тому утворює continuous
+odometry constraint. Full mode застосував 18143 із 22121 доступних increments:
+LiDAR має пріоритет, а VO заповнює його прогалини.
 
-Поточна система є **loosely coupled**: stereo VO та LiDAR ICP спочатку окремо оцінюють relative motion, після чого EKF отримує лише speed/yaw-rate correction. Cross-covariance features, point clouds, IMU bias і state при цьому втрачається.
+Stereo VO прийняв 4099/9323 пар, але окремий visual run погіршив RMSE на 4.8%.
+Причина — simple essential-matrix/stereo-scale frontend має більший translation
+scatter і систематичний bias. Adaptive NIS обмежує окремі outliers, але не може
+усунути bias послідовності. Full mode не виконує подвійний update від VO та LO
+на тому самому інтервалі, бо ці вимірювання корельовані.
 
-**VIO** спільно оптимізує camera reprojection residuals, IMU preintegration, pose, velocity і biases. Це краще утримує scale та orientation, але потребує точної camera–IMU calibration, ініціалізації й складнішого nonlinear solver.
+## Як обробляються дані
 
-**LIO** використовує IMU для deskew кожного LiDAR scan і спільно оцінює trajectory та scan residuals. Це прямо усуває основну проблему нашого VLP-16 ICP — rolling motion distortion. Ціна — точна time/extrinsic calibration, більший state і суттєво більше обчислень.
+1. Readers потоково читають headerless CSV і перевіряють кількість полів,
+   timestamps, SI ranges та calibration.
+2. Encoder cumulative counts диференціюються за фактичним `dt`. Діаметри коліс,
+   resolution та wheelbase переводять їх у signed left/right speed, forward
+   speed і differential yaw rate.
+3. IMU gyro z та acceleration x виконують EKF prediction. Wheel measurement
+   коригує speed і gyro bias.
+4. Slip detector порівнює wheel yaw/acceleration з IMU, має debounce і під час
+   active state пропускає wheel updates.
+5. Stereo VO повертає metric body-frame `dx,dy,dyaw` після rectification,
+   ORB/RANSAC, disparity scale та повного camera-to-vehicle transform.
+6. LiDAR points переводяться у vehicle frame, фільтруються, voxelized; planar
+   ICP оцінює body-frame `dx,dy,dyaw`.
+7. На попередньому frontend epoch EKF зберігає pose clone, covariance та
+   cross-covariance. Relative pose innovation коригує `x,y,yaw`.
+8. NIS вище soft threshold збільшує measurement covariance. Лише outlier, який
+   потребує scale понад 100, повністю відкидається.
+9. Після estimator run VRS використовується для global та start anchored
+   evaluation. Він не впливає на state.
+
+## Перевірка причин Urban39 error
+
+### Wheelbase і wheel kinematics
+
+Calibration wheelbase дорівнює `1.52439 м`. Після усереднення на 0.5–2 с
+регресія IMU/FOG yaw до wheel yaw дає scale близько 1.0, а effective wheelbase
+близько 1.53 м. Знак yaw правильний. Отже помилка не пояснюється неправильним
+wheelbase або local-to-global handedness.
+
+### Gyro bias і повороти
+
+FOG audit показує, що форма коротких поворотів збігається, але на всьому
+`urban39` wheel/IMU yaw має малий довготривалий offset. За 31 хвилину різниця
+накопичується приблизно до 1.8 рад. На `urban35` такий offset майже непомітний;
+на петльовій траєкторії він створює сотні метрів position drift.
+
+### Slip
+
+Без synthetic fault detector активний лише для 40 із 186674 wheel samples
+(0.02%). Тому natural slip у поточному detector не є головною причиною великої
+помилки. Thresholds лишаються консервативними через шум differentiation
+encoder speed на 100 Hz.
+
+### Extrinsics і transforms
+
+Camera та LiDAR rotations ортонормальні, determinant близький до 1. LiDAR points
+переводяться до vehicle origin до ICP. Для camera translation додано lever-arm
+term `t - R*t`, якого не було в першій реалізації. Relative transform не
+додається як global `dx,dy`: він порівнюється з body-frame delta від anchor
+pose.
+
+### Covariance та NIS
+
+Початковий LiDAR `yaw_std=0.3 rad` робив LO практично неактивним. Після
+калібрування за scan-to-scan residuals uncertainty становить приблизно
+0.08–0.10 м для translation і 0.003–0.006 рад для yaw залежно від quality.
+Adaptive NIS збільшує недовіру до слабкого measurement, а не одразу відкидає
+його. На фінальному Urban39 LiDAR run covariance було збільшено для 398 із
+18022 increments; hard rejection не знадобився.
+
+## Чому перший графік не збігався на старті
+
+Попередній plot показував global Kabsch alignment. Він мінімізує сумарну ATE і
+може змістити першу точку; на старому Urban39 графіку цей offset становив
+приблизно 349 м. Це була властивість візуалізації, а не timestamp shift.
+
+Тепер trajectory plots використовують start anchored translation, тому старт
+збігається. Primary global ATE збережено окремо, щоб не змінювати стандартну
+метрику.
+
+## Відмінність від VIO та LIO
+
+Поточний проєкт є loosely coupled odometry fusion. VO/Lidar спочатку самостійно
+оцінюють relative transform, після чого EKF отримує тільки `dx,dy,dyaw`.
+
+- **VIO** спільно оптимізує feature reprojection, IMU preintegration, poses,
+  velocity і biases.
+- **LIO** використовує IMU для deskew LiDAR scan та оптимізує point/plane
+  residuals відносно local map разом з inertial state.
+
+У реалізації немає IMU deskew, scan-to-map, loop closure або joint nonlinear
+optimization. Тому 91 м на 11.1 км є помітним покращенням прототипу, але не
+рівнем повноцінного LIO.
+
+## Наступні покращення
+
+1. IMU deskew для rolling VLP-16 scans.
+2. Scan-to-map LiDAR odometry замість лише scan-to-scan ICP.
+3. Online bias/noise adaptation окремо для straight та turning regimes.
+4. VIO з IMU preintegration замість незалежного essential-matrix frontend.
+5. Loop closure або map constraint для довгих міських петель.
+6. Окрема оцінка на безперервних RTK segments, бо valid RTK покриває лише
+   частину `urban39`.

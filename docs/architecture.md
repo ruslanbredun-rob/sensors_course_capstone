@@ -2,175 +2,181 @@
 
 ## Призначення
 
-Pipeline оцінює planar state автомобіля на `urban35` без GNSS measurement у
-фільтрі. State EKF: `[x, y, yaw, v, gyro_bias, accel_bias]`. Вихід має локальний
-початок і довільний початковий yaw. VRS-GPS застосовується після завершення
-оцінювання тільки як незалежний position reference.
+Pipeline оцінює planar state автомобіля на `urban35` та `urban39` без GNSS
+measurement у фільтрі. EKF state:
 
-## Конфігурації
+```text
+[x, y, yaw, speed, gyro_z_bias, accel_x_bias]
+```
 
-| Режим | Вимірювання у EKF |
+Вихід має локальний початок і довільний початковий yaw. VRS-GPS читається лише
+після estimator run як незалежний position reference.
+
+## Режими
+
+| Режим | Дані у fusion |
 |---|---|
-| `base` | **E1:** IMU angular rate + wheel speed/course; `x,y` інтегрує EKF |
-| `slip` | **E2:** Base + wheel/IMU disagreement detector і slip rejection |
-| `visual` | E2 + guarded stereo relative translation/yaw |
-| `lidar` | E2 + guarded VLP-16 ICP, camera data не читаються |
-| `full` | E2 + guarded stereo VO та VLP-16 ICP |
+| `base` | IMU prediction + wheel speed і differential yaw |
+| `slip` | Base + wheel/IMU disagreement detector |
+| `visual` | E2 + continuous body-frame stereo `dx,dy,dyaw` |
+| `lidar` | E2 + continuous body-frame ICP `dx,dy,dyaw` |
+| `full` | E2 + LiDAR; VO заповнює лише прогалини LiDAR |
+
+IMU-only experiment відсутній: acceleration bias робить подвійну інтеграцію
+лінійної швидкості нестійкою. Базовий INS завжди використовує IMU та колеса з
+порівнянною частотою близько 100 Hz.
 
 ## Data flow
 
 ```mermaid
 flowchart LR
     ENC[encoder.csv] --> W[Wheel odometry]
-    IMU[xsens_imu.csv] --> E[2D EKF]
-    W --> S[Slip detector]
-    W --> E
-    S -->|reject unreliable wheel update| E
-    CAM[Stereo PNG] --> VO[Rectification + ORB + RANSAC + stereo scale]
-    VO --> H[Sensor health manager]
-    VLP[VLP_left BIN] --> ICP[Vehicle-frame filtering + voxel grid + 2D ICP]
-    W -->|initial motion only| ICP
-    ICP --> H
-    S --> H
-    H -->|correction only while wheel degraded| E
-    E --> STATE[estimated_state_mode.csv]
-    STATE --> EV[Timestamp matching + rigid SE2 alignment]
-    VRS[vrs_gps.csv fix 4] --> EV
-    EV --> OUT[ATE tables + plots]
+    IMU[xsens_imu.csv] --> EKF[Planar EKF]
+    W --> SLIP[Slip detector]
+    W --> EKF
+    SLIP -->|reject wheel update| EKF
+
+    CAM[Stereo PNG] --> VO[Rectify + ORB + RANSAC + stereo scale]
+    VLP[VLP_left BIN] --> LO[Vehicle frame + voxel + planar ICP]
+    W -->|initial guess| LO
+
+    VO --> HEALTH[Quality and coverage health]
+    LO --> HEALTH
+    HEALTH --> CLONE[Pose clone + adaptive NIS]
+    CLONE -->|body dx dy dyaw| EKF
+
+    EKF --> STATE[estimated_state_mode.csv]
+    STATE --> EVAL[Timestamp match + SE2 evaluation]
+    VRS[vrs_gps.csv fix 4] --> EVAL
+    EVAL --> OUT[CSV metrics + PNG plots]
 ```
 
-Усі sensor events зливаються за nanosecond timestamp. За однакового timestamp IMU
-обробляється першою, бо її потік передається першим до merger. EKF зберігає єдиний
-runtime state; readers, frontends і evaluation його не змінюють.
+Усі events зливаються за nanosecond timestamp. За однакового timestamp порядок
+такий: IMU, wheel, relative measurement, pose epoch. Це дозволяє спочатку
+застосувати increment між двома кадрами, а потім зберегти скориговану pose як
+anchor наступного increment.
 
-## Модулі
+## Межі модулів
 
 | Пакет | Відповідальність |
 |---|---|
-| `src/main.py` | CLI entrypoint і CLI overrides |
-| `src/common/` | Вкладені config dataclasses, data models і merge потоків за timestamp |
-| `src/dataset/` | Загальні CSV checks, encoder/VRS readers і rigid calibration reader |
-| `src/imu/` | Xsens IMU reader, вибір gyro/acceleration полів і SI sanity checks |
-| `src/wheel/` | Counts → left/right speed, differential yaw, fault injection і slip detector |
-| `src/camera/` | Stereo pairing, rectification, ORB, essential matrix і metric stereo scale |
-| `src/lidar/` | VLP loader, calibrated points, voxel filter і 2D ICP |
-| `src/fusion/` | EKF, health gating, experiment orchestration і CSV export |
-| `src/evaluation/` | VRS matching, SE(2) alignment, ATE, CSV tables та plots |
+| `src/main.py` | CLI та path overrides |
+| `src/common/` | Config dataclasses, data contracts, timestamp merge |
+| `src/dataset/` | CSV readers і rigid calibration reader |
+| `src/imu/` | Xsens gyro z / acceleration x reader |
+| `src/wheel/` | Encoder calibration, wheel kinematics, slip detection |
+| `src/camera/` | Stereo pairing, rectification, feature VO, cached reader |
+| `src/lidar/` | VLP preprocessing, planar ICP, cached reader |
+| `src/fusion/` | EKF, correlated pose clones, health policy, experiments |
+| `src/evaluation/` | VRS matching, alignment, metrics, tables and plots |
 
-## Конфігурація
+`config/default.json` повторює ці межі секціями `general`, `evaluation`, `imu`,
+`wheel`, `slip`, `visual_odometry`, `lidar_odometry` та `fusion`.
 
-`config/default.json` повторює межі підсистем. `general` містить dataset/output
-paths і допустимий часовий крок; `evaluation` — VRS policy; `imu`, `wheel` та
-`slip` — noise, NIS gates і detector parameters; `visual_odometry` та
-`lidar_odometry` — параметри frontends; `fusion` — gates і fallback window для
-relative motion. Loader перетворює кожну секцію на окремий immutable dataclass,
-тому сенсорний модуль читає тільки власну групу параметрів.
+## Базовий EKF
 
-Runtime створює числові CSV і PNG. Інженерний опис результатів зберігається
-окремо у `results/conclusions.md` та не формується з коду.
+IMU yaw rate і forward acceleration виконують prediction. Wheel speed
+спостерігає `speed`. Differential wheel yaw rate разом з IMU gyro коригує
+`gyro_z_bias`. Під час активного slip wheel corrections пропускаються, але IMU
+prediction продовжується.
 
-## EKF та update contracts
+Scalar wheel updates використовують hard NIS gate. Covariance оновлюється у
+Joseph form. Slip detector має debounce: три послідовні bad samples для входу
+і двадцять good samples для виходу.
 
-IMU yaw rate й forward acceleration поширюють позицію, yaw та speed між
-measurement epochs. Wheel speed спостерігає `v`, а differential-wheel
-kinematics дає незалежний course constraint. Differential-wheel yaw rate,
-stereo yaw rate і LiDAR yaw rate спостерігають `gyro_bias` через різницю з
-поточним IMU gyro. Relative translation `dx / dt` спостерігає forward speed.
-Поточна planar модель не використовує `dy` як окремий EKF measurement, але
-зберігає його у frontend CSV і перевіряє motion bounds.
+## Continuous relative-pose update
 
-IMU-only experiment навмисно відсутній: `accel_x` має bias і не задає надійну
-початкову лінійну швидкість, тому її інтегрування швидко дрейфує. E1 завжди
-поєднує два базові джерела з порівнянною частотою близько 100 Hz.
+VO та LO оцінюють transform від попереднього кадру до поточного у vehicle body
+frame:
 
-Кожний scalar update обчислює innovation variance і NIS. Update вище порога не
-змінює state. Joseph form підтримує симетричну додатну covariance. Під час
-активного slip wheel speed/yaw updates пропускаються, uncertainty speed і
-`gyro_bias` збільшується, а IMU prediction продовжується.
+```text
+z = [dx_body, dy_body, dyaw]
+```
 
-## Stereo visual odometry
+На кожному frontend epoch EKF клонує попередню pose, її covariance та
+cross-covariance з поточним state. Prediction relative pose обчислюється як:
 
-Ліве та праве зображення паруються за однаковим timestamp, а не за індексом.
-OpenCV calibration виконує rectification у половинній роздільності. ORB matches
-між двома послідовними left frames проходять ratio test і RANSAC essential
-matrix. Stereo disparity попереднього кадру дає metric scale. Для далеких сцен
-translation sign essential matrix неоднозначний; `urban35` є forward-driving
-sequence, тому frontend вибирає forward sign. Inlier count, speed, lateral motion
-і yaw-rate bounds відкидають слабкі increments.
+```text
+d_world = p_current - p_anchor
+d_body  = R(yaw_anchor)^T d_world
+dyaw    = wrap(yaw_current - yaw_anchor)
+```
+
+Innovation дорівнює measured minus predicted `[dx,dy,dyaw]`. Jacobian містить
+поточну pose і anchor pose. Через cross-covariance relative measurement не
+помилково сприймається як абсолютний GPS і не стискає довільні global origin та
+yaw.
+
+Спочатку рахується raw NIS. Якщо він перевищує soft threshold, measurement
+covariance збільшується у `raw_nis / threshold` разів і update перераховується.
+Масштаб обмежений значенням 100; більший outlier відкидається. Diagnostics
+зберігають adapted NIS, covariance scale і факт застосування correction.
+
+Frontend fusion активується тільки коли accepted increments покривають не
+менше 30% послідовних пар. Це не дозволяє рідкісним локальним transforms
+накопичувати bias як безперервна одометрія. У `full` режимі LiDAR має пріоритет,
+бо VO та LO вимірюють той самий рух і не є незалежними. VO використовується у
+прогалинах LiDAR.
+
+## Stereo VO
+
+Ліві та праві зображення паруються за точним timestamp. OpenCV calibration
+виконує rectification. ORB matches проходять ratio test та RANSAC essential
+matrix; disparity попереднього кадру задає metric scale.
+
+Camera transform застосовується як повний SE(3) conjugation. До обертання
+translation додається lever-arm term `t - R*t`; це важливо на поворотах, бо
+camera розташована приблизно на 1.6 м попереду vehicle origin. Знак translation
+узгоджується зі signed wheel motion hint.
 
 ## LiDAR odometry
 
-Left VLP-16 points перетворюються sensor-to-vehicle transform, фільтруються за
-range/height і voxelized до 0.25 м. ICP вирівнює current scan у previous vehicle
-frame. Найближчий wheel increment використовується лише як initial guess і gate
-від переходу в неправильний локальний мінімум; результат update походить з ICP.
-Через rolling acquisition VLP-16 planar yaw має систематичну похибку на швидкому
-русі, тому його `yaw_std` навмисно великий. Translation лишається незалежною
-геометричною перевіркою руху.
+Left VLP-16 points переводяться sensor-to-vehicle transform, фільтруються за
+range/height та voxelized. ICP вирівнює current scan у previous vehicle frame.
+Wheel motion використовується лише як initial guess і sanity gate.
 
-## Runtime data path
+На `urban39` scan-to-scan residuals дали приблизно 7 см RMS translation error і
+кілька мілірадіан yaw MAD відносно wheel/FOG audit. Тому measurement uncertainty
+задається від ICP quality, а решта outliers послаблюється adaptive NIS.
 
-1. `dataset/readers.py` потоково читає headerless encoder/VRS CSV, а
-   `imu/reader.py` читає Xsens IMU. Readers перевіряють units, формат і
-   монотонність nanosecond timestamps.
-2. `wheel/odometry.py` застосовує resolution і wheel diameters, ділить приріст
-   count на фактичний `dt` та формує left/right speed, forward speed і yaw rate.
-3. `common/synchronization.py` зливає sensor events за timestamp; IMU prediction та
-   wheel correction працюють приблизно зі 100 Hz.
-4. `wheel/slip_detection.py` порівнює wheel yaw/acceleration з IMU та debounce-ить
-   degraded state. Під час degraded interval wheel update пропускається.
-5. VO/ICP frontends обробляють власні raw files незалежно. Health manager подає
-   їх у EKF лише у короткому degraded wheel interval; quality та NIS gates можуть
-   відкинути correction без зміни state.
-6. Після estimator run `evaluation/metrics.py` окремо читає VRS, виконує time matching,
-   один rigid SE(2) alignment без scale fit і рахує whole-trajectory ATE.
+## Evaluation та графіки
 
-## Порівняння з VIO та LIO
+`vrs_gps.csv` читається тільки з `--validate`. Беруться `fix_state=4`, кожна VRS
+epoch зіставляється з найближчим state у межах 50 мс.
 
-Поточна система loosely coupled: camera або LiDAR frontend спочатку оцінює
-relative motion, а EKF отримує лише speed/yaw-rate correction. Feature residuals,
-point residuals та їх cross-covariance з IMU state у fusion не передаються.
+CSV містить дві оцінки:
 
-VIO спільно оптимізує reprojection residuals, IMU preintegration, pose, velocity
-і biases. LIO використовує IMU для deskew LiDAR scan та спільно оптимізує motion
-і scan residuals. Вони можуть бути точнішими, але потребують точної time/extrinsic
-calibration, ініціалізації, більшого state і nonlinear optimization. Для цього
-прототипу окремі frontends лишають pipeline простим і дозволяють явно показати,
-коли зовнішнє вимірювання було прийняте або відкинуте.
+1. **Global SE(2) ATE** — Kabsch translation і yaw по всіх matched points, без
+   scale fit. Це primary metric форми траєкторії.
+2. **Start anchored error** — використовується той самий fitted yaw, але
+   translation фіксує перші точки разом. Саме його показують trajectory та
+   error-over-time plots, тому старт estimate і reference збігається.
 
-## Evaluation
+Start anchored plot є offline візуалізацією: fitted yaw використовує всю
+reference trajectory. VRS та alignment ніколи не повертаються у EKF.
 
-`vrs_gps.csv` читається тільки з `--validate`, після завершення EKF. Беруться
-`fix_state=4`; кожна VRS epoch зіставляється з найближчим state у межах 50 мс.
-Одна rigid Kabsch SE(2) transform узгоджує local origin і yaw з UTM. Масштаб не
-оцінюється. RMSE, median, P95 і final error рахуються по всіх 169 matched epochs.
+## Перевірені систематичні фактори
 
-Це trajectory-shape accuracy для GPS-denied local estimator. Метрика не є online
-absolute UTM accuracy, бо початкові UTM position та heading не задаються фільтру.
+- encoder wheelbase з calibration дорівнює `1.52439 м`; усереднені wheel yaw,
+  IMU та FOG узгоджуються приблизно в межах 1%, тому масштаб wheelbase не є
+  причиною великої помилки;
+- yaw handedness VO/LO, wheel та IMU однакова;
+- camera/LiDAR rotation matrices ортонормальні, determinant близький до 1;
+- LiDAR already transforms point clouds у vehicle origin; camera lever arm було
+  додано окремо;
+- Urban39 містить малий довготривалий yaw-rate offset. На 31-хвилинній
+  послідовності він накопичується приблизно до 1.8 рад і пояснює сильну
+  деформацію Wheel+IMU trajectory;
+- natural slip detector активний лише 40 з 186674 wheel samples, тому slip не є
+  основним джерелом Urban39 error.
 
-## Відмови та degraded behavior
+## Обмеження та розвиток
 
-- пропущений stereo/LiDAR frame зменшує кількість corrections, але не зупиняє EKF;
-- невалідна calibration, немонотонний timestamp або IMU gap понад `max_dt_s`
-  спричиняє явну помилку;
-- слабкий VO/ICP increment відкидається frontend gate;
-- measurement із високим NIS відкидається EKF gate;
-- wheel/IMU disagreement активує slip state після трьох samples і повертає wheel
-  updates після двадцяти healthy samples;
-- VRS no-fix epochs не входять у primary metric.
+Поточні frontends залишаються loosely coupled odometry. VIO спільно оптимізує
+camera reprojection, IMU preintegration, velocity і biases. LIO додає IMU deskew
+і point/plane residuals у scan-to-map estimator. Цей проєкт не має IMU deskew,
+local map, loop closure або joint nonlinear optimization.
 
-## Результати
-
-Звичайний `urban35` run: E1 Wheel+IMU має 4.153 м RMSE, E2 — 3.788 м. Guarded
-VO приймає один correction і зберігає 3.788 м RMSE. Окремий E2 + LiDAR без
-камер не має достатньо надійного ICP increment у degraded wheel interval, тому
-correction не застосовується і
-результат лишається на рівні E2. Це видно в `relative=used/available`, diagnostics
-CSV і comparison plots.
-
-Причина малого ефекту зовнішніх сенсорів: саме `urban35` є легкою послідовністю
-для Wheel+IMU. Обидва базові потоки мають близько 100 Hz, рух переважно плавний,
-а detector позначає slip лише у 20 із 17 387 wheel samples. E2 уже добре
-відтворює форму траєкторії. Stereo VO та ICP тут є loosely coupled frontends,
-а не VIO/LIO зі спільною оптимізацією та IMU deskew, тому їх постійне fusion
-додавало більше шуму, ніж корисної інформації.
+Наступні практичні кроки: LiDAR deskew, scan-to-map constraints, online
+calibration noise/bias, повноцінний VIO, а для довгих петель — loop closure або
+map constraint.

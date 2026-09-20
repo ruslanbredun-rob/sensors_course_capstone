@@ -19,11 +19,8 @@ __pycache__/
 *.tmp
 
 # Large reproducible per-sample outputs; summaries and screenshots stay tracked.
-/results/estimated_state*.csv
-/results/diagnostics*.csv
-/results/visual_odometry.csv
-/results/lidar_odometry.csv
-/results/validation_pairs.csv
-/results/slip_injection/estimated_state*.csv
-/results/slip_injection/diagnostics*.csv
-/results/slip_injection/validation_pairs.csv
+/results/**/estimated_state*.csv
+/results/**/diagnostics*.csv
+/results/**/visual_odometry.csv
+/results/**/lidar_odometry.csv
+/results/**/validation_pairs.csv

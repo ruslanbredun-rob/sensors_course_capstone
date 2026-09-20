@@ -1,6 +1,6 @@
 # Dataset installation
 
-This project uses sequence `urban35` from the Complex Urban Dataset:
+This project uses sequences `urban35` and `urban39` from the Complex Urban Dataset:
 
 https://sites.google.com/view/complex-urban-dataset
 
@@ -8,7 +8,7 @@ Dataset files are not committed to Git and must not be included in course
 submission archives. Place the extracted sequence at:
 
 ```text
-data/complex_urban/urban35/
+data/complex_urban/<sequence>/
 ├── calibration/
 ├── image/
 │   ├── stereo_left/
@@ -33,3 +33,4 @@ Known sequence details:
 - the first right stereo frame corresponding to `1544686261456267672` is absent;
 - the first expected right VLP frame corresponding to `1544686261584782000` is absent;
 - VRS-GPS epochs without a valid RTK fix are excluded from primary metrics.
+- `urban39/archives/` may retain the downloaded tar files; runtime does not read them.

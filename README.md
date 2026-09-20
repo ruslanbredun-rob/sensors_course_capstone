@@ -1,60 +1,35 @@
 # GPS-denied vehicle localization
 
 Курсовий проєкт для ДЗ 18–19: planar localization автомобіля на Complex Urban
-Dataset, sequence `urban35`. Базова система обробляє wheel encoders та Xsens
-IMU з порівнянною частотою близько 100 Hz. Stereo camera і left VLP-16
-перевіряються як окремі зовнішні джерела. VRS-GPS не входить у fusion і
-використовується лише для післяпроцесингової оцінки траєкторії.
+Dataset, sequences `urban35` та `urban39`. VRS-GPS не входить у fusion і
+використовується лише для незалежної оцінки готової траєкторії.
 
-## Що реалізовано
+## Реалізовані конфігурації
 
-- **E1 Base:** IMU orientation/angular-rate propagation + wheel linear speed і
-  differential-wheel course; position інтегрується у 2D EKF;
-- **E2 Kinematics + slip:** differential-wheel yaw, gyro-bias correction,
-  debounced slip detector і fallback без wheel updates;
-- **E2 + Visual:** calibrated stereo rectification, ORB/RANSAC visual odometry,
-  metric scale зі stereo disparity, quality та NIS gates;
-- **E2 + LiDAR:** окремий режим без камер з calibrated VLP-16 preprocessing і
-  planar ICP;
-- **E2 + Visual + LiDAR:** обидва зовнішні frontends з guarded fallback;
-- контрольована інжекція wheel fault для перевірки slip detector;
-- VRS-GPS evaluation по всій траєкторії, comparison CSV, NIS diagnostics і PNG
-  зі скрінами результатів.
+- **E1 Base:** Xsens IMU prediction + wheel speed і differential-wheel course;
+- **E2 Kinematics + slip:** E1 + wheel/IMU disagreement detector;
+- **E2 + Visual:** E2 + calibrated metric stereo VO;
+- **E2 + LiDAR:** E2 + calibrated left VLP-16 planar ICP без camera data;
+- **E2 + Visual + LiDAR:** continuous LiDAR update та VO для прогалин LiDAR.
 
-EKF state: `[x, y, yaw, speed, gyro_z_bias, accel_x_bias]`. Координати локальні;
-початок і початковий yaw довільні.
+EKF state: `[x, y, yaw, speed, gyro_z_bias, accel_x_bias]`. VO/LO передають
+body-frame `dx, dy, dyaw`. EKF зіставляє increment зі збереженою попередньою
+pose clone та її covariance, формує innovation по `x, y, yaw` і адаптивно
+збільшує measurement covariance за NIS.
 
 ## Дані
 
-Завантажте `urban35` з
+Завантажте `urban35` та `urban39` з
 [Complex Urban Dataset](https://sites.google.com/view/complex-urban-dataset) і
-розпакуйте в `data/complex_urban/urban35/`. Дані займають близько 5.5 GB і не
-входять у Git або архів здачі. Детальна структура є в
-[data/README.md](data/README.md).
+розпакуйте в `data/complex_urban/<sequence>/`. Сирі дані не входять у Git.
+Структура каталогів описана в [data/README.md](data/README.md).
 
-Для E1/E2 потрібні:
-
-```text
-data/complex_urban/urban35/
-├── calibration/
-│   ├── EncoderParameter.txt
-│   ├── Vehicle2IMU.txt
-│   └── Vehicle2VRS.txt       # лише --validate
-└── sensor_data/
-    ├── encoder.csv
-    ├── xsens_imu.csv
-    └── vrs_gps.csv           # лише --validate
-```
-
-Режим `visual` потребує
-`calibration/{left.yaml,right.yaml,Vehicle2Stereo.txt}` і
-`image/{stereo_left,stereo_right}/`. Режим `lidar` працює без камер і потребує
-лише `calibration/Vehicle2LeftVLP.txt` та `sensor_data/VLP_left/`. Режим `full`
-потребує обидва набори.
+Для E1/E2 потрібні `encoder.csv`, `xsens_imu.csv`, `EncoderParameter.txt` та
+`Vehicle2IMU.txt`. `--validate` також читає `vrs_gps.csv` і
+`Vehicle2VRS.txt`. Visual mode потребує stereo images і camera calibration;
+LiDAR mode — `VLP_left` scans і `Vehicle2LeftVLP.txt`.
 
 ## Середовище
-
-Запускайте з кореня репозиторію:
 
 ```bash
 python3 -m venv .venv
@@ -63,90 +38,83 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-## ДЗ 18: мінімальний прототип
+## Запуск
+
+ДЗ 18, базовий прототип:
 
 ```bash
 python -m src.main --mode base
 ```
 
-Команда читає IMU та енкодери з різними timestamps, запускає EKF і записує стан
-після кожного IMU prediction у `results/estimated_state_base.csv`. Для короткої
-перевірки можна додати `--max-events 1000`.
-
-## ДЗ 19: повне порівняння
+Повне порівняння `urban35`:
 
 ```bash
 python -m src.main --mode all --validate
 ```
 
-Повний CPU run займає приблизно дві хвилини в поточному середовищі. Він створює:
-
-- `results/comparison_metrics.csv` і `validation_pairs.csv`;
-- `results/estimated_state_<mode>.csv` та diagnostics CSV;
-- `results/visual_odometry.csv` і `lidar_odometry.csv`;
-- `results/trajectory_validation.png`;
-- `results/screenshots/trajectory_comparison.png`;
-- `results/screenshots/error_over_time.png`;
-- `results/screenshots/rmse_comparison.png`;
-- `results/screenshots/filter_consistency.png`;
-- `results/screenshots/metrics_summary.png`.
-
-Текстовий опис і висновки зберігаються у статичному
-[`results/conclusions.md`](results/conclusions.md). Pipeline цей файл не генерує
-і не перезаписує.
-
-Контрольована перевірка slip detector:
+Повне порівняння `urban39`:
 
 ```bash
-python -m src.main --mode slip --inject-slip --validate \
-  --output results/slip_injection
+python -m src.main --mode all --validate \
+  --dataset data/complex_urban/urban39 \
+  --output results/urban39
 ```
 
-Вона додає 25% scale fault правого колеса на інтервалі 60–70 с і створює
-`results/slip_injection/screenshots/slip_detection.png`.
+Розраховані VO/LO можна повторно використати для швидкого tuning EKF:
 
-Шляхи можна перевизначити через `--dataset PATH`, `--output PATH` або
-`config/default.json`.
+```bash
+python -m src.main --mode all --validate --reuse-frontends \
+  --dataset data/complex_urban/urban39 \
+  --output results/urban39
+```
 
-Окремий експеримент E2 + LiDAR без читання camera frames:
+`--reuse-frontends` читає `visual_odometry.csv` і `lidar_odometry.csv` з
+output directory. Повний raw `urban39` frontend run займає близько 30 хвилин;
+повторний filter-only run — близько двох хвилин.
+
+Окремий LiDAR experiment без читання camera frames:
 
 ```bash
 python -m src.main --mode lidar --validate
 ```
 
-## Результати `urban35`
+Контрольована перевірка slip detector:
 
-Метрика — 2D ATE на 169 valid `VRS fix_state=4` epochs уздовж траєкторії
-3215 м. Локальна траєкторія один раз вирівнюється з UTM через rigid SE(2):
-translation і yaw коригуються, scale не змінюється.
+```bash
+python -m src.main --mode slip --inject-slip --validate \
+  --output results/urban35/slip_injection
+```
 
-| Конфігурація | RMSE, м | P95, м |
-|---|---:|---:|
-| E1 INS baseline: IMU + wheel | 4.153 | 7.024 |
-| E2 kinematics + slip | **3.788** | 5.958 |
-| E2 + stereo VO | **3.788** | **5.953** |
-| E2 + LiDAR, no camera | 3.788 | 5.958 |
-| E2 + stereo VO + LiDAR | **3.788** | **5.953** |
+## Результати
 
-E1 є базовою INS конфігурацією: IMU дає angular rate для orientation, а колеса —
-лінійну швидкість та незалежний course increment. Position інтегрується в EKF
-із цих двох джерел. IMU-only конфігурації немає, бо подвійне інтегрування
-acceleration не дає стійкої лінійної швидкості. E2 знижує RMSE на 8.8%
-відносно E1. Зовнішні frontends використовуються тільки під час деградації wheel
-updates, тому LiDAR-only режим зберігає результат E2, а один прийнятий VO
-increment змінює RMSE лише на 0.00004 м. У контрольованому fault test detector
-має 99.8% detection rate і 0.24% false-positive samples; slip-aware EKF дає
-3.557 м RMSE.
+Primary metric — 2D ATE після rigid SE(2) alignment без scale fit.
 
-Саме `urban35` є легкою послідовністю для Wheel+IMU: рух переважно плавний, а
-slip detector активний лише для 20 із 17 387 wheel samples. Тому VO та LiDAR
-майже нічого виправляти. Реалізовані stereo VO й ICP є окремими frontends, а не
-повноцінними VIO/LIO зі спільною оптимізацією та IMU deskew.
+| Sequence | E1 IMU+wheel | E2 | E2+VO | E2+LiDAR | Full |
+|---|---:|---:|---:|---:|---:|
+| `urban35`, RMSE м | 4.153 | **3.788** | 3.788 | 3.788 | 3.788 |
+| `urban39`, RMSE м | 188.456 | 188.471 | 197.477 | 90.789 | **90.690** |
 
-Детальні висновки: [results/conclusions.md](results/conclusions.md). Архітектура,
-кадри координат і межі модулів: [docs/architecture.md](docs/architecture.md).
+На `urban35` coverage VO та LO нижче 30%, тому health gate не подає
+розріджені increments у EKF. На `urban39` LiDAR coverage становить 97.4% і
+continuous relative-pose fusion зменшує RMSE на 51.9%. Stereo VO coverage
+44.0%, але його scale/bias у цій простій реалізації погіршує окремий visual run.
 
-## Перевірка коду
+Графіки trajectory comparison є start anchored, тому перші точки оцінки та
+VRS збігаються. Числові таблиці містять і standard global ATE, і start anchored
+error. Деталі та обмеження: [results/conclusions.md](results/conclusions.md).
+Архітектура: [docs/architecture.md](docs/architecture.md).
+
+Pipeline створює тільки числові CSV і PNG:
+
+- `results/<sequence>/comparison_metrics.csv`;
+- `results/<sequence>/validation_pairs.csv`;
+- `results/<sequence>/estimated_state_<mode>.csv`;
+- `results/<sequence>/diagnostics*.csv`;
+- `results/<sequence>/screenshots/*.png`.
+
+Статичний файл висновків код не генерує і не перезаписує.
+
+## Перевірка
 
 ```bash
 python -m unittest discover -s tests -v
