@@ -20,12 +20,18 @@ class PositionEvaluation:
     reference_xy_m: np.ndarray
     aligned_xy_m: np.ndarray
     error_m: np.ndarray
+    start_aligned_xy_m: np.ndarray
+    start_error_m: np.ndarray
     valid_fix_epochs: int
     matched_epochs: int
     rmse_m: float
     median_m: float
     p95_m: float
     final_error_m: float
+    start_rmse_m: float
+    start_median_m: float
+    start_p95_m: float
+    start_final_error_m: float
     alignment_yaw_rad: float
 
 
@@ -84,18 +90,31 @@ def evaluate_position(
     rotation = u @ correction @ vt
     aligned_xy = centered_estimate @ rotation + reference_center
     error = np.linalg.norm(aligned_xy - reference_xy, axis=1)
+    # Keep the globally optimal yaw but anchor translation at the first RTK
+    # epoch. This view makes accumulated drift visible and guarantees that the
+    # plotted trajectories start at the same point.
+    start_aligned_xy = (
+        (estimated_xy - estimated_xy[0]) @ rotation + reference_xy[0]
+    )
+    start_error = np.linalg.norm(start_aligned_xy - reference_xy, axis=1)
     return PositionEvaluation(
         timestamp_ns=np.array([fix.timestamp_ns for fix, _, _ in pairs], dtype=np.int64),
         time_offset_ms=np.array([offset / 1e6 for _, _, offset in pairs]),
         reference_xy_m=reference_xy,
         aligned_xy_m=aligned_xy,
         error_m=error,
+        start_aligned_xy_m=start_aligned_xy,
+        start_error_m=start_error,
         valid_fix_epochs=len(reference_valid),
         matched_epochs=len(pairs),
         rmse_m=float(np.sqrt(np.mean(error**2))),
         median_m=float(np.median(error)),
         p95_m=float(np.percentile(error, 95)),
         final_error_m=float(error[-1]),
+        start_rmse_m=float(np.sqrt(np.mean(start_error**2))),
+        start_median_m=float(np.median(start_error)),
+        start_p95_m=float(np.percentile(start_error, 95)),
+        start_final_error_m=float(start_error[-1]),
         alignment_yaw_rad=float(np.arctan2(rotation[0, 1], rotation[0, 0])),
     )
 

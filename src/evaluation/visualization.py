@@ -33,20 +33,22 @@ def save_validation_plot(result: PositionEvaluation, output_path: Path) -> None:
     """Plot one aligned trajectory and position error at valid VRS epochs."""
     origin = result.reference_xy_m[0]
     reference = result.reference_xy_m - origin
-    estimate = result.aligned_xy_m - origin
+    estimate = result.start_aligned_xy_m - origin
     elapsed_s = (result.timestamp_ns - result.timestamp_ns[0]) * 1e-9
 
     figure, axes = plt.subplots(1, 2, figsize=(11, 4.5))
     axes[0].plot(reference[:, 0], reference[:, 1], label="VRS-GPS RTK", linewidth=2)
-    axes[0].plot(estimate[:, 0], estimate[:, 1], label="Best fused, SE(2) aligned")
+    axes[0].plot(estimate[:, 0], estimate[:, 1], label="Best fused, start anchored")
     axes[0].set_xlabel("UTM east offset (m)")
     axes[0].set_ylabel("UTM north offset (m)")
     axes[0].set_aspect("equal", adjustable="box")
     axes[0].legend()
     axes[0].grid(True, alpha=0.3)
 
-    axes[1].plot(elapsed_s, result.error_m, label="2D position error")
-    axes[1].axhline(result.rmse_m, color="tab:red", linestyle="--", label="RMSE")
+    axes[1].plot(elapsed_s, result.start_error_m, label="2D position error")
+    axes[1].axhline(
+        result.start_rmse_m, color="tab:red", linestyle="--", label="RMSE"
+    )
     axes[1].set_xlabel("Time since first matched RTK fix (s)")
     axes[1].set_ylabel("Position error (m)")
     axes[1].legend()
@@ -73,15 +75,37 @@ def _save_trajectory_comparison(
         zorder=1,
     )
     for name, result in evaluations.items():
-        estimate = result.aligned_xy_m - origin
+        estimate = result.start_aligned_xy_m - origin
         axis.plot(
             estimate[:, 0],
             estimate[:, 1],
             linewidth=1.5,
-            label=f"{DISPLAY_NAMES.get(name, name)} ({result.rmse_m:.2f} m)",
+            label=(
+                f"{DISPLAY_NAMES.get(name, name)} "
+                f"(ATE {result.rmse_m:.2f} m)"
+            ),
         )
+    axis.scatter(
+        0.0,
+        0.0,
+        marker="*",
+        s=180,
+        color="black",
+        edgecolor="white",
+        linewidth=0.9,
+        zorder=10,
+        label="Common start",
+    )
+    axis.annotate(
+        "start (0, 0)",
+        (0.0, 0.0),
+        xytext=(10, 10),
+        textcoords="offset points",
+        fontsize=8,
+    )
     axis.set(xlabel="UTM east offset (m)", ylabel="UTM north offset (m)")
     axis.set_aspect("equal", adjustable="box")
+    axis.set_title("All trajectories anchored at the common start; yaw from SE(2) fit")
     axis.grid(True, alpha=0.3)
     axis.legend(fontsize=8)
     _save_figure(figure, output_path)
@@ -95,11 +119,14 @@ def _save_error_comparison(
         elapsed_s = (result.timestamp_ns - result.timestamp_ns[0]) * 1e-9
         axis.plot(
             elapsed_s,
-            result.error_m,
+            result.start_error_m,
             linewidth=1.2,
             label=DISPLAY_NAMES.get(name, name),
         )
-    axis.set(xlabel="Time since first matched RTK fix (s)", ylabel="2D ATE error (m)")
+    axis.set(
+        xlabel="Time since first matched RTK fix (s)",
+        ylabel="Start-anchored 2D error (m)",
+    )
     axis.grid(True, alpha=0.3)
     axis.legend(fontsize=8)
     _save_figure(figure, output_path)
@@ -109,17 +136,24 @@ def _save_rmse_comparison(
     evaluations: dict[str, PositionEvaluation], output_path: Path
 ) -> None:
     names = list(evaluations)
-    values = [evaluations[name].rmse_m for name in names]
+    global_values = [evaluations[name].rmse_m for name in names]
+    start_values = [evaluations[name].start_rmse_m for name in names]
     figure, axis = plt.subplots(figsize=(8, 4.5))
-    bars = axis.bar(
-        [DISPLAY_NAMES.get(name, name) for name in names],
-        values,
-        color=plt.cm.viridis(np.linspace(0.15, 0.85, len(names))),
+    positions = np.arange(len(names))
+    width = 0.38
+    global_bars = axis.bar(
+        positions - width / 2, global_values, width, label="Global SE(2) ATE"
     )
-    axis.bar_label(bars, fmt="%.2f m", padding=3)
+    start_bars = axis.bar(
+        positions + width / 2, start_values, width, label="Start anchored"
+    )
+    axis.bar_label(global_bars, fmt="%.1f", padding=3, fontsize=8)
+    axis.bar_label(start_bars, fmt="%.1f", padding=3, fontsize=8)
     axis.set_ylabel("2D ATE RMSE (m)")
-    axis.set_title("Whole-trajectory accuracy after rigid SE(2) alignment")
+    axis.set_title("Whole-trajectory accuracy")
+    axis.set_xticks(positions, [DISPLAY_NAMES.get(name, name) for name in names])
     axis.tick_params(axis="x", rotation=18)
+    axis.legend()
     axis.grid(True, axis="y", alpha=0.3)
     _save_figure(figure, output_path)
 
@@ -153,10 +187,10 @@ def save_consistency_plot(
     *,
     wheel_speed_threshold: float,
     wheel_yaw_threshold: float,
-    relative_speed_threshold: float,
-    relative_yaw_threshold: float,
+    relative_pose_threshold: float,
+    max_covariance_scale: float,
 ) -> None:
-    """Plot all available one-dimensional NIS series and their gates."""
+    """Plot wheel gates and adaptive relative-pose consistency diagnostics."""
     wheel_rows = list(
         csv.DictReader(
             (output_root / f"diagnostics_{mode}.csv").open(encoding="utf-8")
@@ -179,14 +213,14 @@ def save_consistency_plot(
             wheel_yaw_threshold,
         ),
         (
-            *_numeric_column(relative_rows, "speed_nis"),
-            "VO/LiDAR speed NIS",
-            relative_speed_threshold,
+            *_numeric_column(relative_rows, "pose_nis"),
+            "VO/LiDAR pose NIS after adaptation",
+            relative_pose_threshold,
         ),
         (
-            *_numeric_column(relative_rows, "yaw_rate_nis"),
-            "VO/LiDAR yaw-rate NIS",
-            relative_yaw_threshold,
+            *_numeric_column(relative_rows, "covariance_scale"),
+            "Adaptive covariance scale",
+            max_covariance_scale,
         ),
     ]
     figure, axes = plt.subplots(2, 2, figsize=(11, 7), sharex=False)
@@ -197,7 +231,10 @@ def save_consistency_plot(
         axis.axhline(threshold, color="tab:red", linestyle="--", label="NIS gate")
         axis.set_xlabel("Time (s)")
         axis.set_ylabel("NIS (-)")
-        axis.set_ylim(0.0, max(10.0, threshold * 2.0))
+        upper = max(10.0, threshold * 2.0)
+        if len(values):
+            upper = min(upper, max(10.0, float(np.percentile(values, 99)) * 1.2))
+        axis.set_ylim(0.0, upper)
         axis.grid(True, alpha=0.3)
         axis.legend(fontsize=8)
     figure.suptitle(f"Filter consistency diagnostics: {DISPLAY_NAMES.get(mode, mode)}")
@@ -262,6 +299,7 @@ def save_metrics_table(
             (
                 DISPLAY_NAMES.get(name, name),
                 f"{result.rmse_m:.3f}",
+                f"{result.start_rmse_m:.3f}",
                 f"{result.median_m:.3f}",
                 f"{result.p95_m:.3f}",
                 improvement,
@@ -271,8 +309,15 @@ def save_metrics_table(
     axis.axis("off")
     table = axis.table(
         cellText=rows,
-        colLabels=("Configuration", "RMSE (m)", "Median (m)", "P95 (m)", "vs E1"),
-        colWidths=(0.34, 0.15, 0.15, 0.15, 0.14),
+        colLabels=(
+            "Configuration",
+            "Global RMSE (m)",
+            "Start RMSE (m)",
+            "Median (m)",
+            "P95 (m)",
+            "vs E1",
+        ),
+        colWidths=(0.30, 0.14, 0.14, 0.12, 0.12, 0.12),
         cellLoc="center",
         loc="center",
     )

@@ -29,6 +29,10 @@ def write_metrics_csv(
                 "median_m",
                 "p95_m",
                 "final_error_m",
+                "start_rmse_m",
+                "start_median_m",
+                "start_p95_m",
+                "start_final_error_m",
             )
         )
         for name, result in evaluations.items():
@@ -40,6 +44,10 @@ def write_metrics_csv(
                     f"{result.median_m:.6f}",
                     f"{result.p95_m:.6f}",
                     f"{result.final_error_m:.6f}",
+                    f"{result.start_rmse_m:.6f}",
+                    f"{result.start_median_m:.6f}",
+                    f"{result.start_p95_m:.6f}",
+                    f"{result.start_final_error_m:.6f}",
                 )
             )
 
@@ -59,6 +67,9 @@ def write_validation_pairs_csv(
                 "aligned_est_easting_m",
                 "aligned_est_northing_m",
                 "error_m",
+                "start_aligned_est_easting_m",
+                "start_aligned_est_northing_m",
+                "start_error_m",
             )
         )
         for name, result in evaluations.items():
@@ -73,6 +84,9 @@ def write_validation_pairs_csv(
                         f"{result.aligned_xy_m[index, 0]:.4f}",
                         f"{result.aligned_xy_m[index, 1]:.4f}",
                         f"{result.error_m[index]:.4f}",
+                        f"{result.start_aligned_xy_m[index, 0]:.4f}",
+                        f"{result.start_aligned_xy_m[index, 1]:.4f}",
+                        f"{result.start_error_m[index]:.4f}",
                     )
                 )
 
@@ -102,8 +116,8 @@ def _save_diagnostic_plots(
         mode,
         wheel_speed_threshold=config.wheel.speed_nis_threshold,
         wheel_yaw_threshold=config.wheel.yaw_nis_threshold,
-        relative_speed_threshold=config.fusion.relative_speed_nis_threshold,
-        relative_yaw_threshold=config.fusion.relative_yaw_nis_threshold,
+        relative_pose_threshold=config.fusion.relative_pose_nis_threshold,
+        max_covariance_scale=config.fusion.relative_pose_max_covariance_scale,
     )
     save_slip_plot(output, mode)
 
