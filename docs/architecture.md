@@ -45,20 +45,26 @@ runtime state; readers, frontends і evaluation його не змінюють.
 
 ## Модулі
 
-| Модуль | Відповідальність |
+| Пакет | Відповідальність |
 |---|---|
-| `src/config.py` | Paths, noise values, gates і frontend parameters |
-| `src/dataset.py` | Headerless CSV readers, units і monotonic timestamp checks |
-| `src/calibration.py` | Sensor-to-vehicle rigid transforms |
-| `src/wheel_odometry.py` | Counts → left/right speed, differential yaw і fault injection |
-| `src/slip_detection.py` | Debounced wheel/IMU yaw та acceleration disagreement |
-| `src/visual_odometry.py` | Stereo pairing, rectification, ORB matching, essential matrix, metric stereo scale |
-| `src/lidar_odometry.py` | VLP binary loader, calibrated points, voxel filter, 2D ICP |
-| `src/synchronization.py` | Stable multi-stream merge за timestamp |
-| `src/ekf.py` | Predict, scalar updates, Joseph covariance update та NIS gates |
-| `src/pipeline.py` | Experiment orchestration, CSV export, evaluation artifacts |
-| `src/evaluation.py` | Valid RTK selection, nearest-time match, SE(2) alignment, ATE |
-| `src/visualization.py` | Trajectory, error, RMSE, NIS і slip PNG |
+| `src/main.py` | CLI entrypoint і CLI overrides |
+| `src/common/` | Вкладені config dataclasses, data models і merge потоків за timestamp |
+| `src/dataset/` | Загальні CSV checks, encoder/VRS readers і rigid calibration reader |
+| `src/imu/` | Xsens IMU reader, вибір gyro/acceleration полів і SI sanity checks |
+| `src/wheel/` | Counts → left/right speed, differential yaw, fault injection і slip detector |
+| `src/camera/` | Stereo pairing, rectification, ORB, essential matrix і metric stereo scale |
+| `src/lidar/` | VLP loader, calibrated points, voxel filter і 2D ICP |
+| `src/fusion/` | EKF, health gating, experiment orchestration і CSV export |
+| `src/evaluation/` | VRS matching, SE(2) alignment, ATE та plots |
+
+## Конфігурація
+
+`config/default.json` повторює межі підсистем. `general` містить dataset/output
+paths і допустимий часовий крок; `evaluation` — VRS policy; `imu`, `wheel` та
+`slip` — noise, NIS gates і detector parameters; `visual_odometry` та
+`lidar_odometry` — параметри frontends; `fusion` — gates і fallback window для
+relative motion. Loader перетворює кожну секцію на окремий immutable dataclass,
+тому сенсорний модуль читає тільки власну групу параметрів.
 
 ## EKF та update contracts
 
@@ -101,18 +107,19 @@ frame. Найближчий wheel increment використовується л�
 
 ## Runtime data path
 
-1. `dataset.py` потоково читає headerless encoder/IMU CSV, переводить поля у SI
-   units та перевіряє монотонність nanosecond timestamps.
-2. `wheel_odometry.py` застосовує resolution і wheel diameters, ділить приріст
+1. `dataset/readers.py` потоково читає headerless encoder/VRS CSV, а
+   `imu/reader.py` читає Xsens IMU. Readers перевіряють units, формат і
+   монотонність nanosecond timestamps.
+2. `wheel/odometry.py` застосовує resolution і wheel diameters, ділить приріст
    count на фактичний `dt` та формує left/right speed, forward speed і yaw rate.
-3. `synchronization.py` зливає sensor events за timestamp; IMU prediction та
+3. `common/synchronization.py` зливає sensor events за timestamp; IMU prediction та
    wheel correction працюють приблизно зі 100 Hz.
-4. `slip_detection.py` порівнює wheel yaw/acceleration з IMU та debounce-ить
+4. `wheel/slip_detection.py` порівнює wheel yaw/acceleration з IMU та debounce-ить
    degraded state. Під час degraded interval wheel update пропускається.
 5. VO/ICP frontends обробляють власні raw files незалежно. Health manager подає
    їх у EKF лише у короткому degraded wheel interval; quality та NIS gates можуть
    відкинути correction без зміни state.
-6. Після estimator run `evaluation.py` окремо читає VRS, виконує time matching,
+6. Після estimator run `evaluation/metrics.py` окремо читає VRS, виконує time matching,
    один rigid SE(2) alignment без scale fit і рахує whole-trajectory ATE.
 
 ## Порівняння з VIO та LIO

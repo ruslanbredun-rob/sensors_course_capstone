@@ -66,7 +66,7 @@ python -m pip install -r requirements.txt
 ## ДЗ 18: мінімальний прототип
 
 ```bash
-python main.py --mode base
+python -m src.main --mode base
 ```
 
 Команда читає IMU та енкодери з різними timestamps, запускає EKF і записує стан
@@ -76,7 +76,7 @@ python main.py --mode base
 ## ДЗ 19: повне порівняння
 
 ```bash
-python main.py --mode all --validate
+python -m src.main --mode all --validate
 ```
 
 Повний CPU run займає приблизно дві хвилини в поточному середовищі. Він створює:
@@ -94,7 +94,7 @@ python main.py --mode all --validate
 Контрольована перевірка slip detector:
 
 ```bash
-python main.py --mode slip --inject-slip --validate \
+python -m src.main --mode slip --inject-slip --validate \
   --output results/slip_injection
 ```
 
@@ -107,7 +107,7 @@ python main.py --mode slip --inject-slip --validate \
 Окремий експеримент E2 + LiDAR без читання camera frames:
 
 ```bash
-python main.py --mode lidar --validate
+python -m src.main --mode lidar --validate
 ```
 
 ## Результати `urban35`
