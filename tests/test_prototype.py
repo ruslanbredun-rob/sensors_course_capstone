@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -133,6 +134,24 @@ class PrototypeTests(unittest.TestCase):
             ]
             measurement = next(wheel_measurements(samples, path))
             self.assertAlmostEqual(measurement.speed_m_s, 3.141592653589793)
+            self.assertEqual(measurement.yaw_rate_rad_s, 0.0)
+
+    def test_wheel_speed_preserves_reverse_motion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "EncoderParameter.txt"
+            path.write_text(
+                "Encoder resolution: 100\n"
+                "Encoder left wheel diameter: 1\n"
+                "Encoder right wheel diameter: 1\n"
+                "Encoder wheel base: 2\n",
+                encoding="utf-8",
+            )
+            samples = [
+                EncoderSample(1_000_000_000, 100, 100),
+                EncoderSample(2_000_000_000, 50, 50),
+            ]
+            measurement = next(wheel_measurements(samples, path))
+            self.assertAlmostEqual(measurement.speed_m_s, -math.pi / 2)
             self.assertEqual(measurement.yaw_rate_rad_s, 0.0)
 
     def test_events_are_sorted_and_wheel_update_changes_estimate(self) -> None:

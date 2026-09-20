@@ -51,8 +51,6 @@ def wheel_measurements(
                 raise ValueError("Encoder timestamps must increase")
             left_delta = sample.left_count - previous.left_count
             right_delta = sample.right_count - previous.right_count
-            if left_delta < 0 or right_delta < 0:
-                raise ValueError("Encoder count decreased; rollover is not supported")
             left_speed = (
                 left_delta * math.pi * calibration.left_diameter_m
                 / calibration.resolution / dt
@@ -62,8 +60,8 @@ def wheel_measurements(
                 / calibration.resolution / dt
             )
             speed = 0.5 * (left_speed + right_speed)
-            if speed > 70:
-                raise ValueError("Encoder speed exceeds 70 m/s; check counts and units")
+            if max(abs(left_speed), abs(right_speed)) > 70:
+                raise ValueError("Encoder wheel speed exceeds 70 m/s; check counts and units")
             yield WheelMeasurement(
                 sample.timestamp_ns,
                 speed,
