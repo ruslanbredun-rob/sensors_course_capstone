@@ -1,5 +1,4 @@
 VRS fix=4: 169/169 epochs matched within 50 ms
+Reference trajectory length=3215.3 m
 2D ATE uses one rigid SE(2) alignment; trajectory scale is unchanged.
-Raw wheel odometry: RMSE=113.838 m, median=115.039 m, P95=158.157 m
 E2 kinematics + slip: RMSE=3.557 m, median=2.840 m, P95=6.552 m
-Best fused=E2 kinematics + slip: improvement over wheel_only=96.9%

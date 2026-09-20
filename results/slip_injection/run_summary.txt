@@ -1,3 +1,2 @@
-wheel_only: states=17387, wheel=17387, rejected=0, slip=0, relative=0, relative_rejected=0, final=(3016.498, 20.425) m, RMSE=113.838 m
-slip: states=17388, wheel=17387, rejected=1043, slip=1038, relative=0, relative_rejected=0, final=(3112.325, 631.412) m, RMSE=3.557 m
+slip: states=17388, wheel=17387, rejected=1043, slip=1038, relative=0/0, relative_rejected=0, final=(3112.325, 631.412) m, RMSE=3.557 m
   injected slip: detection=99.8%, false-positive samples=0.24%

@@ -1,5 +1,5 @@
-wheel_only: states=17387, wheel=17387, rejected=0, slip=0, relative=0, relative_rejected=0, final=(3108.302, 641.557) m, RMSE=4.625 m
-base: states=17388, wheel=17387, rejected=4, slip=0, relative=0, relative_rejected=0, final=(3208.830, 20.805) m, RMSE=38.441 m
-slip: states=17388, wheel=17387, rejected=24, slip=20, relative=0, relative_rejected=0, final=(3112.047, 624.038) m, RMSE=3.788 m
-visual: states=17388, wheel=17387, rejected=24, slip=20, relative=828, relative_rejected=38, final=(3114.464, 612.682) m, RMSE=3.842 m
-full: states=17388, wheel=17387, rejected=24, slip=20, relative=2550, relative_rejected=38, final=(3114.436, 612.723) m, RMSE=3.844 m
+base: states=17388, wheel=17387, rejected=4, slip=0, relative=0/0, relative_rejected=0, final=(3111.058, 626.675) m, RMSE=4.153 m
+slip: states=17388, wheel=17387, rejected=24, slip=20, relative=0/0, relative_rejected=0, final=(3112.047, 624.038) m, RMSE=3.788 m
+visual: states=17388, wheel=17387, rejected=24, slip=20, relative=1/184, relative_rejected=0, final=(3112.057, 624.006) m, RMSE=3.788 m
+lidar: states=17388, wheel=17387, rejected=24, slip=20, relative=0/27, relative_rejected=0, final=(3112.047, 624.038) m, RMSE=3.788 m
+full: states=17388, wheel=17387, rejected=24, slip=20, relative=1/211, relative_rejected=0, final=(3112.057, 624.006) m, RMSE=3.788 m

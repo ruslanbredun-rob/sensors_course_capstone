@@ -11,11 +11,11 @@ Pipeline оцінює planar state автомобіля на `urban35` без GN
 
 | Режим | Вимірювання у EKF |
 |---|---|
-| `base` | **INS baseline:** IMU predict + wheel-speed correction |
-| `slip` | Base + differential-wheel yaw rate + slip rejection |
-| `visual` | Slip + stereo relative translation/yaw |
-| `full` | Visual + VLP-16 ICP relative translation/yaw |
-| raw wheel comparator | Окреме differential-drive інтегрування без IMU та EKF |
+| `base` | **E1:** IMU angular rate + wheel speed/course; `x,y` інтегрує EKF |
+| `slip` | **E2:** Base + wheel/IMU disagreement detector і slip rejection |
+| `visual` | E2 + guarded stereo relative translation/yaw |
+| `lidar` | E2 + guarded VLP-16 ICP, camera data не читаються |
+| `full` | E2 + guarded stereo VO та VLP-16 ICP |
 
 ## Data flow
 
@@ -27,10 +27,12 @@ flowchart LR
     W --> E
     S -->|reject unreliable wheel update| E
     CAM[Stereo PNG] --> VO[Rectification + ORB + RANSAC + stereo scale]
-    VO --> E
+    VO --> H[Sensor health manager]
     VLP[VLP_left BIN] --> ICP[Vehicle-frame filtering + voxel grid + 2D ICP]
     W -->|initial motion only| ICP
-    ICP --> E
+    ICP --> H
+    S --> H
+    H -->|correction only while wheel degraded| E
     E --> STATE[estimated_state_mode.csv]
     STATE --> EV[Timestamp matching + rigid SE2 alignment]
     VRS[vrs_gps.csv fix 4] --> EV
@@ -48,7 +50,7 @@ runtime state; readers, frontends і evaluation його не змінюють.
 | `src/config.py` | Paths, noise values, gates і frontend parameters |
 | `src/dataset.py` | Headerless CSV readers, units і monotonic timestamp checks |
 | `src/calibration.py` | Sensor-to-vehicle rigid transforms |
-| `src/wheel_odometry.py` | Counts → left/right speed, differential yaw, wheel-only baseline, fault injection |
+| `src/wheel_odometry.py` | Counts → left/right speed, differential yaw і fault injection |
 | `src/slip_detection.py` | Debounced wheel/IMU yaw та acceleration disagreement |
 | `src/visual_odometry.py` | Stereo pairing, rectification, ORB matching, essential matrix, metric stereo scale |
 | `src/lidar_odometry.py` | VLP binary loader, calibrated points, voxel filter, 2D ICP |
@@ -61,11 +63,16 @@ runtime state; readers, frontends і evaluation його не змінюють.
 ## EKF та update contracts
 
 IMU yaw rate й forward acceleration поширюють позицію, yaw та speed між
-measurement epochs. Wheel speed спостерігає `v`. Differential-wheel yaw rate,
+measurement epochs. Wheel speed спостерігає `v`, а differential-wheel
+kinematics дає незалежний course constraint. Differential-wheel yaw rate,
 stereo yaw rate і LiDAR yaw rate спостерігають `gyro_bias` через різницю з
 поточним IMU gyro. Relative translation `dx / dt` спостерігає forward speed.
 Поточна planar модель не використовує `dy` як окремий EKF measurement, але
 зберігає його у frontend CSV і перевіряє motion bounds.
+
+IMU-only experiment навмисно відсутній: `accel_x` має bias і не задає надійну
+початкову лінійну швидкість, тому її інтегрування швидко дрейфує. E1 завжди
+поєднує два базові джерела з порівнянною частотою близько 100 Hz.
 
 Кожний scalar update обчислює innovation variance і NIS. Update вище порога не
 змінює state. Joseph form підтримує симетричну додатну covariance. Під час
@@ -92,6 +99,35 @@ frame. Найближчий wheel increment використовується л�
 русі, тому його `yaw_std` навмисно великий. Translation лишається незалежною
 геометричною перевіркою руху.
 
+## Runtime data path
+
+1. `dataset.py` потоково читає headerless encoder/IMU CSV, переводить поля у SI
+   units та перевіряє монотонність nanosecond timestamps.
+2. `wheel_odometry.py` застосовує resolution і wheel diameters, ділить приріст
+   count на фактичний `dt` та формує left/right speed, forward speed і yaw rate.
+3. `synchronization.py` зливає sensor events за timestamp; IMU prediction та
+   wheel correction працюють приблизно зі 100 Hz.
+4. `slip_detection.py` порівнює wheel yaw/acceleration з IMU та debounce-ить
+   degraded state. Під час degraded interval wheel update пропускається.
+5. VO/ICP frontends обробляють власні raw files незалежно. Health manager подає
+   їх у EKF лише у короткому degraded wheel interval; quality та NIS gates можуть
+   відкинути correction без зміни state.
+6. Після estimator run `evaluation.py` окремо читає VRS, виконує time matching,
+   один rigid SE(2) alignment без scale fit і рахує whole-trajectory ATE.
+
+## Порівняння з VIO та LIO
+
+Поточна система loosely coupled: camera або LiDAR frontend спочатку оцінює
+relative motion, а EKF отримує лише speed/yaw-rate correction. Feature residuals,
+point residuals та їх cross-covariance з IMU state у fusion не передаються.
+
+VIO спільно оптимізує reprojection residuals, IMU preintegration, pose, velocity
+і biases. LIO використовує IMU для deskew LiDAR scan та спільно оптимізує motion
+і scan residuals. Вони можуть бути точнішими, але потребують точної time/extrinsic
+calibration, ініціалізації, більшого state і nonlinear optimization. Для цього
+прототипу окремі frontends лишають pipeline простим і дозволяють явно показати,
+коли зовнішнє вимірювання було прийняте або відкинуте.
+
 ## Evaluation
 
 `vrs_gps.csv` читається тільки з `--validate`, після завершення EKF. Беруться
@@ -115,7 +151,16 @@ absolute UTM accuracy, бо початкові UTM position та heading не з
 
 ## Результати
 
-Звичайний `urban35` run: E2 має 3.788 м RMSE проти 4.625 м raw wheel odometry. E3 знижує
-P95 з 5.958 до 5.774 м, але RMSE зростає до 3.842 м. E4 має 3.844 м, тому LiDAR
-не дає додаткового покращення на цій послідовності. Це обмеження видно у
-comparison plots і явно збережено у висновках.
+Звичайний `urban35` run: E1 Wheel+IMU має 4.153 м RMSE, E2 — 3.788 м. Guarded
+VO приймає один correction і зберігає 3.788 м RMSE. Окремий E2 + LiDAR без
+камер не має достатньо надійного ICP increment у degraded wheel interval, тому
+correction не застосовується і
+результат лишається на рівні E2. Це видно в `relative=used/available`, diagnostics
+CSV і comparison plots.
+
+Причина малого ефекту зовнішніх сенсорів: саме `urban35` є легкою послідовністю
+для Wheel+IMU. Обидва базові потоки мають близько 100 Hz, рух переважно плавний,
+а detector позначає slip лише у 20 із 17 387 wheel samples. E2 уже добре
+відтворює форму траєкторії. Stereo VO та ICP тут є loosely coupled frontends,
+а не VIO/LIO зі спільною оптимізацією та IMU deskew, тому їх постійне fusion
+додавало більше шуму, ніж корисної інформації.

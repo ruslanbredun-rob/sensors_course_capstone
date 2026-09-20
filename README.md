@@ -1,19 +1,23 @@
 # GPS-denied vehicle localization
 
 Курсовий проєкт для ДЗ 18–19: planar localization автомобіля на Complex Urban
-Dataset, sequence `urban35`. Система обробляє wheel encoders, Xsens IMU, stereo
-camera та left VLP-16. VRS-GPS не входить у fusion і використовується лише для
-післяпроцесингової оцінки траєкторії.
+Dataset, sequence `urban35`. Базова система обробляє wheel encoders та Xsens
+IMU з порівнянною частотою близько 100 Hz. Stereo camera і left VLP-16
+перевіряються як окремі зовнішні джерела. VRS-GPS не входить у fusion і
+використовується лише для післяпроцесингової оцінки траєкторії.
 
 ## Що реалізовано
 
-- **E1 Base:** IMU prediction + wheel-speed update у 2D EKF;
+- **E1 Base:** IMU orientation/angular-rate propagation + wheel linear speed і
+  differential-wheel course; position інтегрується у 2D EKF;
 - **E2 Kinematics + slip:** differential-wheel yaw, gyro-bias correction,
   debounced slip detector і fallback без wheel updates;
-- **E3 Visual:** calibrated stereo rectification, ORB/RANSAC visual odometry,
+- **E2 + Visual:** calibrated stereo rectification, ORB/RANSAC visual odometry,
   metric scale зі stereo disparity, quality та NIS gates;
-- **E4 Full:** E3 + calibrated VLP-16 preprocessing і planar ICP;
-- raw wheel-only comparator, контрольована інжекція wheel fault;
+- **E2 + LiDAR:** окремий режим без камер з calibrated VLP-16 preprocessing і
+  planar ICP;
+- **E2 + Visual + LiDAR:** обидва зовнішні frontends з guarded fallback;
+- контрольована інжекція wheel fault для перевірки slip detector;
 - VRS-GPS evaluation по всій траєкторії, comparison CSV, NIS diagnostics і PNG
   зі скрінами результатів.
 
@@ -42,9 +46,11 @@ data/complex_urban/urban35/
     └── vrs_gps.csv           # лише --validate
 ```
 
-E3 також потребує `calibration/{left.yaml,right.yaml,Vehicle2Stereo.txt}` і
-`image/{stereo_left,stereo_right}/`. E4 потребує
-`calibration/Vehicle2LeftVLP.txt` і `sensor_data/VLP_left/`.
+Режим `visual` потребує
+`calibration/{left.yaml,right.yaml,Vehicle2Stereo.txt}` і
+`image/{stereo_left,stereo_right}/`. Режим `lidar` працює без камер і потребує
+лише `calibration/Vehicle2LeftVLP.txt` та `sensor_data/VLP_left/`. Режим `full`
+потребує обидва набори.
 
 ## Середовище
 
@@ -98,25 +104,40 @@ python main.py --mode slip --inject-slip --validate \
 Шляхи можна перевизначити через `--dataset PATH`, `--output PATH` або
 `config/default.json`.
 
+Окремий експеримент E2 + LiDAR без читання camera frames:
+
+```bash
+python main.py --mode lidar --validate
+```
+
 ## Результати `urban35`
 
-Метрика — 2D ATE на 169 valid `VRS fix_state=4` epochs. Локальна траєкторія один
-раз вирівнюється з UTM через rigid SE(2): translation і yaw коригуються, scale не
-змінюється.
+Метрика — 2D ATE на 169 valid `VRS fix_state=4` epochs уздовж траєкторії
+3215 м. Локальна траєкторія один раз вирівнюється з UTM через rigid SE(2):
+translation і yaw коригуються, scale не змінюється.
 
 | Конфігурація | RMSE, м | P95, м |
 |---|---:|---:|
-| Raw wheel odometry | 4.625 | 7.116 |
-| E1 INS baseline: IMU + wheel speed | 38.441 | 72.350 |
+| E1 INS baseline: IMU + wheel | 4.153 | 7.024 |
 | E2 kinematics + slip | **3.788** | 5.958 |
-| E3 + stereo VO | 3.842 | **5.774** |
-| E4 + stereo VO + LiDAR | 3.844 | 5.780 |
+| E2 + stereo VO | **3.788** | **5.953** |
+| E2 + LiDAR, no camera | 3.788 | 5.958 |
+| E2 + stereo VO + LiDAR | **3.788** | **5.953** |
 
-E1 є базовою INS конфігурацією: IMU виконує prediction, а wheel speed дає
-correction. Raw wheel odometry існує лише як нефільтрований comparator для ДЗ19.
-E2 знижує RMSE на 18.1% відносно raw wheel odometry. У контрольованому fault test detector
+E1 є базовою INS конфігурацією: IMU дає angular rate для orientation, а колеса —
+лінійну швидкість та незалежний course increment. Position інтегрується в EKF
+із цих двох джерел. IMU-only конфігурації немає, бо подвійне інтегрування
+acceleration не дає стійкої лінійної швидкості. E2 знижує RMSE на 8.8%
+відносно E1. Зовнішні frontends використовуються тільки під час деградації wheel
+updates, тому LiDAR-only режим зберігає результат E2, а один прийнятий VO
+increment змінює RMSE лише на 0.00004 м. У контрольованому fault test detector
 має 99.8% detection rate і 0.24% false-positive samples; slip-aware EKF дає
-3.557 м RMSE проти 113.838 м для пошкодженої raw wheel odometry.
+3.557 м RMSE.
+
+Саме `urban35` є легкою послідовністю для Wheel+IMU: рух переважно плавний, а
+slip detector активний лише для 20 із 17 387 wheel samples. Тому VO та LiDAR
+майже нічого виправляти. Реалізовані stereo VO й ICP є окремими frontends, а не
+повноцінними VIO/LIO зі спільною оптимізацією та IMU deskew.
 
 Детальні висновки: [results/conclusions.md](results/conclusions.md). Архітектура,
 кадри координат і межі модулів: [docs/architecture.md](docs/architecture.md).
