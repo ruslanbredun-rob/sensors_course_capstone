@@ -10,6 +10,7 @@ from .config import RunConfig
 from .dataset import read_encoders, read_imu, read_vrs_reference
 from .ekf import VehicleEKF
 from .evaluation import PositionEvaluation, evaluate_position
+from .lidar_odometry import LidarOdometryResult, compute_lidar_odometry
 from .models import Estimate, ImuSample, RelativeMotion, WheelMeasurement
 from .slip_detection import WheelSlipDetector
 from .synchronization import ordered_sensor_events
@@ -59,6 +60,13 @@ def _require_inputs(dataset: Path, *, mode: str, validate: bool) -> None:
                 dataset / "calibration" / "Vehicle2Stereo.txt",
                 dataset / "image" / "stereo_left",
                 dataset / "image" / "stereo_right",
+            )
+        )
+    if mode in ("full", "all"):
+        required.extend(
+            (
+                dataset / "calibration" / "Vehicle2LeftVLP.txt",
+                dataset / "sensor_data" / "VLP_left",
             )
         )
     missing = [path for path in required if not path.exists()]
@@ -321,10 +329,21 @@ def run(
             f"visual frontend: accepted={len(visual.motions)}/"
             f"{visual.attempted_pairs}, rejected={visual.rejected_pairs}"
         )
-    modes = ["base", "slip", "visual"] if mode == "all" else [mode]
+    lidar: LidarOdometryResult | None = None
+    if mode in ("full", "all"):
+        lidar = compute_lidar_odometry(config, wheels)
+        print(
+            f"lidar frontend: accepted={len(lidar.motions)}/"
+            f"{lidar.attempted_pairs}, rejected={lidar.rejected_pairs}"
+        )
+    modes = ["base", "slip", "visual", "full"] if mode == "all" else [mode]
     results = []
     for name in modes:
-        relative_streams = [visual.motions] if name in ("visual", "full") and visual else []
+        relative_streams = []
+        if name in ("visual", "full") and visual:
+            relative_streams.append(visual.motions)
+        if name == "full" and lidar:
+            relative_streams.append(lidar.motions)
         results.append(
             _run_filter(
                 config,

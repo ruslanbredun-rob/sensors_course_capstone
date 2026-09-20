@@ -10,6 +10,7 @@ from src.config import load_config
 from src.dataset import read_imu, read_vrs_reference
 from src.ekf import VehicleEKF
 from src.evaluation import evaluate_position
+from src.lidar_odometry import rigid_fit_2d
 from src.models import (
     EncoderSample,
     Estimate,
@@ -165,6 +166,20 @@ class PrototypeTests(unittest.TestCase):
         self.assertTrue(filter_.last_relative_speed_accepted)
         self.assertTrue(filter_.last_relative_yaw_accepted)
         self.assertGreater(filter_.x[4], 0.0)
+
+    def test_lidar_rigid_fit_recovers_planar_transform(self) -> None:
+        import numpy as np
+
+        source = np.array(((0.0, 0.0), (2.0, 0.0), (0.0, 1.0), (2.0, 2.0)))
+        yaw = 0.2
+        rotation_expected = np.array(
+            ((np.cos(yaw), -np.sin(yaw)), (np.sin(yaw), np.cos(yaw)))
+        )
+        translation_expected = np.array((1.5, -0.4))
+        target = source @ rotation_expected.T + translation_expected
+        rotation, translation = rigid_fit_2d(source, target)
+        np.testing.assert_allclose(rotation, rotation_expected, atol=1e-12)
+        np.testing.assert_allclose(translation, translation_expected, atol=1e-12)
 
 
 if __name__ == "__main__":
