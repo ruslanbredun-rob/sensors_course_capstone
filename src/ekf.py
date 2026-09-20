@@ -1,8 +1,8 @@
-"""Planar wheel + IMU EKF for homework 18.
+"""Planar multi-sensor EKF for homework 18 and 19.
 
 State is [x, y, yaw, speed, gyro_z_bias, accel_x_bias]. The world origin and
-initial yaw are arbitrary for this GPS-denied prototype. Wheel speed is the
-only measurement update; VRS and IMU Euler attitude are never fused.
+initial yaw are arbitrary. Wheel, stereo VO and LiDAR odometry provide local
+updates; VRS and IMU Euler attitude are never fused.
 """
 
 from __future__ import annotations
@@ -26,6 +26,11 @@ class VehicleEKF:
         self.last_wheel_accepted: bool | None = None
         self.last_wheel_yaw_nis: float | None = None
         self.last_wheel_yaw_accepted: bool | None = None
+        self.last_relative_source: str | None = None
+        self.last_relative_speed_nis: float | None = None
+        self.last_relative_speed_accepted: bool | None = None
+        self.last_relative_yaw_nis: float | None = None
+        self.last_relative_yaw_accepted: bool | None = None
 
     def _estimate(self) -> Estimate:
         assert self.timestamp_ns is not None
@@ -173,5 +178,40 @@ class VehicleEKF:
         return self._estimate()
 
     def update_relative_motion(self, measurement: RelativeMotion) -> Estimate:
-        """Reserved for VO/LiDAR in later phases."""
-        raise NotImplementedError("VO/LiDAR updates are outside homework 18")
+        """Fuse body-forward speed and yaw rate from VO or LiDAR odometry."""
+        if measurement.dt_s <= 0.0:
+            raise ValueError("Relative-motion dt_s must be positive")
+        self._advance(measurement.timestamp_ns)
+        self.last_relative_source = measurement.source
+        quality = max(0.05, min(1.0, measurement.quality))
+
+        speed_h = np.zeros(6)
+        speed_h[3] = 1.0
+        speed_measurement = measurement.dx_m / measurement.dt_s
+        speed_std = measurement.translation_std_m / (measurement.dt_s * quality)
+        (
+            self.last_relative_speed_nis,
+            self.last_relative_speed_accepted,
+        ) = self._scalar_update(
+            speed_measurement - self.x[3],
+            speed_h,
+            speed_std**2,
+            self.config.relative_speed_nis_threshold,
+        )
+
+        assert self._imu is not None
+        yaw_h = np.zeros(6)
+        yaw_h[4] = -1.0
+        predicted_yaw_rate = self._imu.yaw_rate_rad_s - self.x[4]
+        yaw_rate_measurement = measurement.dyaw_rad / measurement.dt_s
+        yaw_std = measurement.yaw_std_rad / (measurement.dt_s * quality)
+        (
+            self.last_relative_yaw_nis,
+            self.last_relative_yaw_accepted,
+        ) = self._scalar_update(
+            yaw_rate_measurement - predicted_yaw_rate,
+            yaw_h,
+            yaw_std**2,
+            self.config.relative_yaw_nis_threshold,
+        )
+        return self._estimate()

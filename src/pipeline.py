@@ -10,9 +10,10 @@ from .config import RunConfig
 from .dataset import read_encoders, read_imu, read_vrs_reference
 from .ekf import VehicleEKF
 from .evaluation import PositionEvaluation, evaluate_position
-from .models import Estimate, ImuSample, WheelMeasurement
+from .models import Estimate, ImuSample, RelativeMotion, WheelMeasurement
 from .slip_detection import WheelSlipDetector
-from .synchronization import ordered_events
+from .synchronization import ordered_sensor_events
+from .visual_odometry import VisualOdometryResult, compute_visual_odometry
 from .wheel_odometry import (
     inject_right_wheel_scale_fault,
     read_encoder_calibration,
@@ -31,10 +32,12 @@ class ExperimentResult:
     injected_samples: int
     detected_injected_samples: int
     false_positive_samples: int
+    relative_updates: int = 0
+    rejected_relative_updates: int = 0
     evaluation: PositionEvaluation | None = None
 
 
-def _require_inputs(dataset: Path, *, validate: bool) -> None:
+def _require_inputs(dataset: Path, *, mode: str, validate: bool) -> None:
     required = [
         dataset / "sensor_data" / "encoder.csv",
         dataset / "sensor_data" / "xsens_imu.csv",
@@ -48,7 +51,17 @@ def _require_inputs(dataset: Path, *, validate: bool) -> None:
                 dataset / "calibration" / "Vehicle2VRS.txt",
             )
         )
-    missing = [path for path in required if not path.is_file()]
+    if mode in ("visual", "full", "all"):
+        required.extend(
+            (
+                dataset / "calibration" / "left.yaml",
+                dataset / "calibration" / "right.yaml",
+                dataset / "calibration" / "Vehicle2Stereo.txt",
+                dataset / "image" / "stereo_left",
+                dataset / "image" / "stereo_right",
+            )
+        )
+    missing = [path for path in required if not path.exists()]
     if missing:
         raise FileNotFoundError(
             "Missing dataset files: "
@@ -114,6 +127,7 @@ def _run_filter(
     config: RunConfig,
     name: str,
     wheels: list[WheelMeasurement],
+    relative_streams: list[list[RelativeMotion]] | None = None,
     *,
     max_events: int | None,
 ) -> ExperimentResult:
@@ -132,10 +146,16 @@ def _run_filter(
     states: list[Estimate] = []
     wheel_count = rejected = slip_samples = 0
     injected = detected_injected = false_positive = 0
+    relative_count = rejected_relative = 0
     event_count = 0
     diagnostics_path = config.output / f"diagnostics_{name}.csv"
-    with diagnostics_path.open("w", newline="", encoding="utf-8") as stream:
+    relative_path = config.output / f"diagnostics_relative_{name}.csv"
+    with (
+        diagnostics_path.open("w", newline="", encoding="utf-8") as stream,
+        relative_path.open("w", newline="", encoding="utf-8") as relative_stream,
+    ):
         writer = csv.writer(stream, lineterminator="\n")
+        relative_writer = csv.writer(relative_stream, lineterminator="\n")
         writer.writerow(
             (
                 "timestamp_ns",
@@ -149,11 +169,27 @@ def _run_filter(
                 "fault_injected",
             )
         )
-        for event in ordered_events(read_imu(config.dataset), wheels):
+        relative_writer.writerow(
+            (
+                "timestamp_ns",
+                "source",
+                "dx_m",
+                "dy_m",
+                "dyaw_rad",
+                "quality",
+                "speed_nis",
+                "yaw_rate_nis",
+                "speed_accepted",
+                "yaw_rate_accepted",
+            )
+        )
+        streams = [read_imu(config.dataset), wheels]
+        streams.extend(relative_streams or [])
+        for event in ordered_sensor_events(*streams):
             if isinstance(event, ImuSample):
                 estimate = estimator.predict(event)
                 states.append(estimate)
-            else:
+            elif isinstance(event, WheelMeasurement):
                 if estimator.timestamp_ns is None or estimator.current_imu is None:
                     continue
                 slip_active = False
@@ -188,6 +224,30 @@ def _run_filter(
                         event.fault_injected,
                     )
                 )
+            else:
+                if estimator.timestamp_ns is None or estimator.current_imu is None:
+                    continue
+                estimator.update_relative_motion(event)
+                relative_count += 1
+                accepted = bool(
+                    estimator.last_relative_speed_accepted
+                    and estimator.last_relative_yaw_accepted
+                )
+                rejected_relative += int(not accepted)
+                relative_writer.writerow(
+                    (
+                        event.timestamp_ns,
+                        event.source,
+                        f"{event.dx_m:.6f}",
+                        f"{event.dy_m:.6f}",
+                        f"{event.dyaw_rad:.8f}",
+                        f"{event.quality:.6f}",
+                        f"{estimator.last_relative_speed_nis:.6f}",
+                        f"{estimator.last_relative_yaw_nis:.6f}",
+                        estimator.last_relative_speed_accepted,
+                        estimator.last_relative_yaw_accepted,
+                    )
+                )
             event_count += 1
             if max_events is not None and event_count >= max_events:
                 break
@@ -203,6 +263,8 @@ def _run_filter(
         injected,
         detected_injected,
         false_positive,
+        relative_count,
+        rejected_relative,
     )
 
 
@@ -222,6 +284,7 @@ def _write_summary(config: RunConfig, results: list[ExperimentResult]) -> str:
         line = (
             f"{result.name}: states={len(result.states)}, wheel={result.wheel_updates}, "
             f"rejected={result.rejected_wheel_updates}, slip={result.slip_samples}, "
+            f"relative={result.relative_updates}, relative_rejected={result.rejected_relative_updates}, "
             f"final=({final.x_m:.3f}, {final.y_m:.3f}) m"
         )
         if result.evaluation is not None:
@@ -248,13 +311,29 @@ def run(
     validate: bool = False,
     inject_slip: bool = False,
 ) -> None:
-    if mode in ("visual", "full"):
-        raise NotImplementedError(f"Mode {mode!r} is not implemented yet")
-    _require_inputs(config.dataset, validate=validate)
+    _require_inputs(config.dataset, mode=mode, validate=validate)
     config.output.mkdir(parents=True, exist_ok=True)
     wheels = _load_wheels(config, inject_slip=inject_slip)
-    modes = ["base", "slip"] if mode == "all" else [mode]
-    results = [_run_filter(config, name, wheels, max_events=max_events) for name in modes]
+    visual: VisualOdometryResult | None = None
+    if mode in ("visual", "full", "all"):
+        visual = compute_visual_odometry(config)
+        print(
+            f"visual frontend: accepted={len(visual.motions)}/"
+            f"{visual.attempted_pairs}, rejected={visual.rejected_pairs}"
+        )
+    modes = ["base", "slip", "visual"] if mode == "all" else [mode]
+    results = []
+    for name in modes:
+        relative_streams = [visual.motions] if name in ("visual", "full") and visual else []
+        results.append(
+            _run_filter(
+                config,
+                name,
+                wheels,
+                relative_streams,
+                max_events=max_events,
+            )
+        )
 
     baseline = list(wheel_only_baseline(wheels))
     _write_estimates(config.output / "estimated_state_wheel_only.csv", baseline)

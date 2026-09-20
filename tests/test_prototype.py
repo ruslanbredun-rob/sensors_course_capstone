@@ -10,7 +10,14 @@ from src.config import load_config
 from src.dataset import read_imu, read_vrs_reference
 from src.ekf import VehicleEKF
 from src.evaluation import evaluate_position
-from src.models import EncoderSample, Estimate, ImuSample, PositionReference, WheelMeasurement
+from src.models import (
+    EncoderSample,
+    Estimate,
+    ImuSample,
+    PositionReference,
+    RelativeMotion,
+    WheelMeasurement,
+)
 from src.slip_detection import WheelSlipDetector
 from src.synchronization import ordered_events
 from src.wheel_odometry import wheel_measurements, wheel_only_baseline
@@ -137,6 +144,27 @@ class PrototypeTests(unittest.TestCase):
         self.assertGreater(estimate.speed_m_s, 9.0)
         self.assertTrue(filter_.last_wheel_accepted)
         self.assertEqual(filter_.predict(events[2]).timestamp_ns, 20000000)
+
+    def test_relative_motion_updates_speed_and_gyro_bias(self) -> None:
+        config = load_config(Path("config/default.json"))
+        filter_ = VehicleEKF(config)
+        filter_.predict(ImuSample(0, 0.2, 0.0))
+        result = filter_.update_relative_motion(
+            RelativeMotion(
+                timestamp_ns=100_000_000,
+                dt_s=0.1,
+                dx_m=1.0,
+                dy_m=0.0,
+                dyaw_rad=0.01,
+                source="test",
+                translation_std_m=0.05,
+                yaw_std_rad=0.005,
+            )
+        )
+        self.assertGreater(result.speed_m_s, 5.0)
+        self.assertTrue(filter_.last_relative_speed_accepted)
+        self.assertTrue(filter_.last_relative_yaw_accepted)
+        self.assertGreater(filter_.x[4], 0.0)
 
 
 if __name__ == "__main__":

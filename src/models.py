@@ -32,6 +32,7 @@ class WheelMeasurement:
 @dataclass(frozen=True)
 class RelativeMotion:
     timestamp_ns: int
+    dt_s: float
     dx_m: float
     dy_m: float
     dyaw_rad: float

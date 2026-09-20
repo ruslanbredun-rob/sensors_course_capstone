@@ -31,6 +31,18 @@ class RunConfig:
     slip_fault_start_s: float
     slip_fault_duration_s: float
     slip_fault_right_scale: float
+    visual_frame_step: int
+    visual_image_scale: float
+    visual_min_matches: int
+    visual_max_speed_m_s: float
+    lidar_frame_step: int
+    lidar_voxel_m: float
+    lidar_max_correspondence_m: float
+    lidar_max_rmse_m: float
+    lidar_min_inlier_ratio: float
+    lidar_initial_speed_m_s: float
+    relative_speed_nis_threshold: float
+    relative_yaw_nis_threshold: float
     max_dt_s: float
 
 
@@ -59,6 +71,18 @@ def load_config(
         "slip_exit_count",
         "slip_fault_duration_s",
         "slip_fault_right_scale",
+        "visual_frame_step",
+        "visual_image_scale",
+        "visual_min_matches",
+        "visual_max_speed_m_s",
+        "lidar_frame_step",
+        "lidar_voxel_m",
+        "lidar_max_correspondence_m",
+        "lidar_max_rmse_m",
+        "lidar_min_inlier_ratio",
+        "lidar_initial_speed_m_s",
+        "relative_speed_nis_threshold",
+        "relative_yaw_nis_threshold",
         "max_dt_s",
     )
     for key in positive:
@@ -85,5 +109,17 @@ def load_config(
         slip_fault_start_s=float(values["slip_fault_start_s"]),
         slip_fault_duration_s=float(values["slip_fault_duration_s"]),
         slip_fault_right_scale=float(values["slip_fault_right_scale"]),
+        visual_frame_step=int(values["visual_frame_step"]),
+        visual_image_scale=float(values["visual_image_scale"]),
+        visual_min_matches=int(values["visual_min_matches"]),
+        visual_max_speed_m_s=float(values["visual_max_speed_m_s"]),
+        lidar_frame_step=int(values["lidar_frame_step"]),
+        lidar_voxel_m=float(values["lidar_voxel_m"]),
+        lidar_max_correspondence_m=float(values["lidar_max_correspondence_m"]),
+        lidar_max_rmse_m=float(values["lidar_max_rmse_m"]),
+        lidar_min_inlier_ratio=float(values["lidar_min_inlier_ratio"]),
+        lidar_initial_speed_m_s=float(values["lidar_initial_speed_m_s"]),
+        relative_speed_nis_threshold=float(values["relative_speed_nis_threshold"]),
+        relative_yaw_nis_threshold=float(values["relative_yaw_nis_threshold"]),
         max_dt_s=float(values["max_dt_s"]),
     )

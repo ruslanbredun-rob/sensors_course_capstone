@@ -2,36 +2,37 @@
 
 from __future__ import annotations
 
+import heapq
 from collections.abc import Iterable, Iterator
 
-from .models import ImuSample, WheelMeasurement
+from .models import ImuSample, RelativeMotion, WheelMeasurement
+
+
+SensorEvent = ImuSample | WheelMeasurement | RelativeMotion
+
+
+def ordered_sensor_events(*streams: Iterable[SensorEvent]) -> Iterator[SensorEvent]:
+    """Merge monotonic streams, preserving argument order for equal timestamps."""
+    iterators = [iter(stream) for stream in streams]
+    heap: list[tuple[int, int, SensorEvent]] = []
+    last_timestamp = [-1] * len(iterators)
+    for priority, iterator in enumerate(iterators):
+        event = next(iterator, None)
+        if event is not None:
+            heapq.heappush(heap, (event.timestamp_ns, priority, event))
+    while heap:
+        _, priority, event = heapq.heappop(heap)
+        if event.timestamp_ns <= last_timestamp[priority]:
+            raise ValueError(f"Sensor stream {priority} is not strictly increasing")
+        last_timestamp[priority] = event.timestamp_ns
+        yield event
+        following = next(iterators[priority], None)
+        if following is not None:
+            heapq.heappush(heap, (following.timestamp_ns, priority, following))
 
 
 def ordered_events(
     imu: Iterable[ImuSample], wheels: Iterable[WheelMeasurement]
 ) -> Iterator[ImuSample | WheelMeasurement]:
     """Merge monotonic streams; process IMU first when timestamps are equal."""
-    imu_iter = iter(imu)
-    wheel_iter = iter(wheels)
-    next_imu = next(imu_iter, None)
-    next_wheel = next(wheel_iter, None)
-    last_imu = -1
-    last_wheel = -1
-    while next_imu is not None or next_wheel is not None:
-        if next_wheel is None or (
-            next_imu is not None and next_imu.timestamp_ns <= next_wheel.timestamp_ns
-        ):
-            event = next_imu
-            assert event is not None
-            if event.timestamp_ns <= last_imu:
-                raise ValueError("IMU timestamps are not strictly increasing")
-            last_imu = event.timestamp_ns
-            next_imu = next(imu_iter, None)
-        else:
-            event = next_wheel
-            assert event is not None
-            if event.timestamp_ns <= last_wheel:
-                raise ValueError("Wheel timestamps are not strictly increasing")
-            last_wheel = event.timestamp_ns
-            next_wheel = next(wheel_iter, None)
-        yield event
+    yield from ordered_sensor_events(imu, wheels)
