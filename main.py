@@ -33,11 +33,22 @@ def main() -> None:
         action="store_true",
         help="Evaluate the output trajectory against valid VRS-GPS fixes",
     )
+    parser.add_argument(
+        "--inject-slip",
+        action="store_true",
+        help="Inject a labelled right-wheel scale fault for detector evaluation",
+    )
     args = parser.parse_args()
     if args.max_events is not None and args.max_events <= 0:
         parser.error("--max-events must be positive")
     config = load_config(args.config, dataset=args.dataset, output=args.output)
-    run(config, args.mode, max_events=args.max_events, validate=args.validate)
+    run(
+        config,
+        args.mode,
+        max_events=args.max_events,
+        validate=args.validate,
+        inject_slip=args.inject_slip,
+    )
 
 
 if __name__ == "__main__":

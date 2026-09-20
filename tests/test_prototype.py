@@ -11,11 +11,37 @@ from src.dataset import read_imu, read_vrs_reference
 from src.ekf import VehicleEKF
 from src.evaluation import evaluate_position
 from src.models import EncoderSample, Estimate, ImuSample, PositionReference, WheelMeasurement
+from src.slip_detection import WheelSlipDetector
 from src.synchronization import ordered_events
-from src.wheel_odometry import wheel_measurements
+from src.wheel_odometry import wheel_measurements, wheel_only_baseline
 
 
 class PrototypeTests(unittest.TestCase):
+    def test_wheel_only_integrates_differential_yaw(self) -> None:
+        measurements = [
+            WheelMeasurement(0, 1.0, 0.0),
+            WheelMeasurement(1_000_000_000, 1.0, 0.5),
+            WheelMeasurement(2_000_000_000, 1.0, 0.5),
+        ]
+        states = list(wheel_only_baseline(measurements))
+        self.assertAlmostEqual(states[-1].yaw_rad, 1.0)
+        self.assertGreater(states[-1].y_m, 0.0)
+
+    def test_slip_detector_debounces_disagreement(self) -> None:
+        detector = WheelSlipDetector(
+            yaw_threshold_rad_s=0.3,
+            accel_threshold_m_s2=2.0,
+            enter_count=2,
+            exit_count=2,
+        )
+        imu = ImuSample(0, 0.0, 0.0)
+        bad = WheelMeasurement(0, 10.0, 1.0)
+        good = WheelMeasurement(0, 10.0, 0.0)
+        self.assertFalse(detector.update(bad, imu, 0.0).active)
+        self.assertTrue(detector.update(bad, imu, 0.0).active)
+        self.assertTrue(detector.update(good, imu, 0.0).active)
+        self.assertFalse(detector.update(good, imu, 0.0).active)
+
     def test_vrs_reader_uses_utm_and_fix_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             sensor_dir = Path(directory) / "sensor_data"

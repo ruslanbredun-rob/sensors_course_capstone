@@ -24,6 +24,9 @@ class WheelMeasurement:
     timestamp_ns: int
     speed_m_s: float
     yaw_rate_rad_s: float
+    left_speed_m_s: float = 0.0
+    right_speed_m_s: float = 0.0
+    fault_injected: bool = False
 
 
 @dataclass(frozen=True)
@@ -33,6 +36,9 @@ class RelativeMotion:
     dy_m: float
     dyaw_rad: float
     source: str
+    translation_std_m: float = 1.0
+    yaw_std_rad: float = 0.1
+    quality: float = 1.0
 
 
 @dataclass(frozen=True)

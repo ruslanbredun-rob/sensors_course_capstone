@@ -24,6 +24,8 @@ class VehicleEKF:
         self._imu: ImuSample | None = None
         self.last_wheel_nis: float | None = None
         self.last_wheel_accepted: bool | None = None
+        self.last_wheel_yaw_nis: float | None = None
+        self.last_wheel_yaw_accepted: bool | None = None
 
     def _estimate(self) -> Estimate:
         assert self.timestamp_ns is not None
@@ -100,26 +102,74 @@ class VehicleEKF:
         self._imu = sample
         return self._estimate()
 
-    def update_wheel(self, measurement: WheelMeasurement) -> Estimate:
-        """Scalar wheel-speed correction with 95% chi-square NIS gate."""
-        self._advance(measurement.timestamp_ns)
-        residual = measurement.speed_m_s - self.x[3]
-        variance = self.P[3, 3] + self.config.wheel_speed_std_m_s**2
+    @property
+    def current_imu(self) -> ImuSample | None:
+        return self._imu
+
+    def _scalar_update(
+        self,
+        residual: float,
+        h: np.ndarray,
+        measurement_variance: float,
+        nis_threshold: float,
+    ) -> tuple[float, bool]:
+        variance = float(h @ self.P @ h + measurement_variance)
         nis = residual * residual / variance
-        self.last_wheel_nis = float(nis)
-        self.last_wheel_accepted = nis <= self.config.wheel_nis_threshold
-        if self.last_wheel_accepted:
-            gain = self.P[:, 3] / variance
+        accepted = nis <= nis_threshold
+        if accepted:
+            gain = self.P @ h / variance
             self.x += gain * residual
-            h = np.zeros(6)
-            h[3] = 1.0
             identity_minus_kh = np.eye(6) - np.outer(gain, h)
-            # Joseph form keeps P symmetric and positive under repeated updates.
             self.P = (
                 identity_minus_kh @ self.P @ identity_minus_kh.T
-                + np.outer(gain, gain) * self.config.wheel_speed_std_m_s**2
+                + np.outer(gain, gain) * measurement_variance
             )
             self.P = 0.5 * (self.P + self.P.T)
+        return float(nis), accepted
+
+    def update_wheel(
+        self,
+        measurement: WheelMeasurement,
+        *,
+        use_yaw_rate: bool = False,
+        reject: bool = False,
+    ) -> Estimate:
+        """Correct speed and optionally gyro bias using wheel yaw rate."""
+        self._advance(measurement.timestamp_ns)
+        self.last_wheel_yaw_nis = None
+        self.last_wheel_yaw_accepted = None
+        if reject:
+            self.last_wheel_nis = None
+            self.last_wheel_accepted = False
+            # Preserve uncertainty while wheel information is unavailable so
+            # the first healthy measurement can reacquire speed and bias.
+            self.P[3, 3] += self.config.wheel_speed_std_m_s**2
+            self.P[4, 4] += self.config.wheel_yaw_rate_std_rad_s**2
+            if use_yaw_rate:
+                self.last_wheel_yaw_accepted = False
+            return self._estimate()
+        speed_h = np.zeros(6)
+        speed_h[3] = 1.0
+        self.last_wheel_nis, self.last_wheel_accepted = self._scalar_update(
+            measurement.speed_m_s - self.x[3],
+            speed_h,
+            self.config.wheel_speed_std_m_s**2,
+            self.config.wheel_nis_threshold,
+        )
+        if use_yaw_rate:
+            assert self._imu is not None
+            yaw_h = np.zeros(6)
+            yaw_h[4] = -1.0
+            predicted_yaw_rate = self._imu.yaw_rate_rad_s - self.x[4]
+            (
+                self.last_wheel_yaw_nis,
+                self.last_wheel_yaw_accepted,
+            ) = self._scalar_update(
+                measurement.yaw_rate_rad_s - predicted_yaw_rate,
+                yaw_h,
+                self.config.wheel_yaw_rate_std_rad_s**2,
+                self.config.wheel_yaw_nis_threshold,
+            )
         return self._estimate()
 
     def update_relative_motion(self, measurement: RelativeMotion) -> Estimate:
