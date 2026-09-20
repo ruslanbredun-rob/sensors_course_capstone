@@ -1,9 +1,0 @@
-VRS fix=4: 169/169 epochs matched within 50 ms
-Reference trajectory length=3215.3 m
-2D ATE uses one rigid SE(2) alignment; trajectory scale is unchanged.
-E1 INS baseline (IMU + wheel): RMSE=4.153 m, median=3.104 m, P95=7.024 m
-E2 kinematics + slip: RMSE=3.788 m, median=3.259 m, P95=5.958 m
-E2 + stereo VO: RMSE=3.788 m, median=3.262 m, P95=5.953 m
-E2 + LiDAR (no camera): RMSE=3.788 m, median=3.259 m, P95=5.958 m
-E2 + stereo VO + LiDAR: RMSE=3.788 m, median=3.262 m, P95=5.953 m
-Best=E2 + stereo VO: improvement over E1 INS baseline=8.8%

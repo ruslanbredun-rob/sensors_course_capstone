@@ -1,5 +1,0 @@
-base: states=17388, wheel=17387, rejected=4, slip=0, relative=0/0, relative_rejected=0, final=(3111.058, 626.675) m, RMSE=4.153 m
-slip: states=17388, wheel=17387, rejected=24, slip=20, relative=0/0, relative_rejected=0, final=(3112.047, 624.038) m, RMSE=3.788 m
-visual: states=17388, wheel=17387, rejected=24, slip=20, relative=1/184, relative_rejected=0, final=(3112.057, 624.006) m, RMSE=3.788 m
-lidar: states=17388, wheel=17387, rejected=24, slip=20, relative=0/27, relative_rejected=0, final=(3112.047, 624.038) m, RMSE=3.788 m
-full: states=17388, wheel=17387, rejected=24, slip=20, relative=1/211, relative_rejected=0, final=(3112.057, 624.006) m, RMSE=3.788 m

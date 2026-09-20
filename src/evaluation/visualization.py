@@ -23,6 +23,12 @@ DISPLAY_NAMES = {
 }
 
 
+def _save_figure(figure: plt.Figure, output_path: Path, *, tight: bool = True) -> None:
+    figure.tight_layout()
+    figure.savefig(output_path, dpi=180, bbox_inches="tight" if tight else None)
+    plt.close(figure)
+
+
 def save_validation_plot(result: PositionEvaluation, output_path: Path) -> None:
     """Plot one aligned trajectory and position error at valid VRS epochs."""
     origin = result.reference_xy_m[0]
@@ -46,19 +52,14 @@ def save_validation_plot(result: PositionEvaluation, output_path: Path) -> None:
     axes[1].legend()
     axes[1].grid(True, alpha=0.3)
 
-    figure.tight_layout()
-    figure.savefig(output_path, dpi=180)
-    plt.close(figure)
+    _save_figure(figure, output_path, tight=False)
 
 
-def save_comparison_plots(
-    evaluations: dict[str, PositionEvaluation], output_directory: Path
+def _save_trajectory_comparison(
+    evaluations: dict[str, PositionEvaluation], output_path: Path
 ) -> None:
-    """Write trajectory, error-over-time and RMSE comparison screenshots."""
-    output_directory.mkdir(parents=True, exist_ok=True)
     first = next(iter(evaluations.values()))
     origin = first.reference_xy_m[0]
-
     figure, axis = plt.subplots(figsize=(8, 6.5))
     reference = first.reference_xy_m - origin
     axis.plot(
@@ -71,41 +72,42 @@ def save_comparison_plots(
         label="VRS-GPS RTK reference",
         zorder=1,
     )
-    for name, evaluation in evaluations.items():
-        estimate = evaluation.aligned_xy_m - origin
+    for name, result in evaluations.items():
+        estimate = result.aligned_xy_m - origin
         axis.plot(
             estimate[:, 0],
             estimate[:, 1],
             linewidth=1.5,
-            label=f"{DISPLAY_NAMES.get(name, name)} ({evaluation.rmse_m:.2f} m)",
-            zorder=2,
+            label=f"{DISPLAY_NAMES.get(name, name)} ({result.rmse_m:.2f} m)",
         )
-    axis.set_xlabel("UTM east offset (m)")
-    axis.set_ylabel("UTM north offset (m)")
+    axis.set(xlabel="UTM east offset (m)", ylabel="UTM north offset (m)")
     axis.set_aspect("equal", adjustable="box")
     axis.grid(True, alpha=0.3)
     axis.legend(fontsize=8)
-    figure.tight_layout()
-    figure.savefig(output_directory / "trajectory_comparison.png", dpi=180)
-    plt.close(figure)
+    _save_figure(figure, output_path)
 
+
+def _save_error_comparison(
+    evaluations: dict[str, PositionEvaluation], output_path: Path
+) -> None:
     figure, axis = plt.subplots(figsize=(9, 5))
-    for name, evaluation in evaluations.items():
-        elapsed_s = (evaluation.timestamp_ns - evaluation.timestamp_ns[0]) * 1e-9
+    for name, result in evaluations.items():
+        elapsed_s = (result.timestamp_ns - result.timestamp_ns[0]) * 1e-9
         axis.plot(
             elapsed_s,
-            evaluation.error_m,
+            result.error_m,
             linewidth=1.2,
             label=DISPLAY_NAMES.get(name, name),
         )
-    axis.set_xlabel("Time since first matched RTK fix (s)")
-    axis.set_ylabel("2D ATE error (m)")
+    axis.set(xlabel="Time since first matched RTK fix (s)", ylabel="2D ATE error (m)")
     axis.grid(True, alpha=0.3)
     axis.legend(fontsize=8)
-    figure.tight_layout()
-    figure.savefig(output_directory / "error_over_time.png", dpi=180)
-    plt.close(figure)
+    _save_figure(figure, output_path)
 
+
+def _save_rmse_comparison(
+    evaluations: dict[str, PositionEvaluation], output_path: Path
+) -> None:
     names = list(evaluations)
     values = [evaluations[name].rmse_m for name in names]
     figure, axis = plt.subplots(figsize=(8, 4.5))
@@ -119,9 +121,19 @@ def save_comparison_plots(
     axis.set_title("Whole-trajectory accuracy after rigid SE(2) alignment")
     axis.tick_params(axis="x", rotation=18)
     axis.grid(True, axis="y", alpha=0.3)
-    figure.tight_layout()
-    figure.savefig(output_directory / "rmse_comparison.png", dpi=180)
-    plt.close(figure)
+    _save_figure(figure, output_path)
+
+
+def save_comparison_plots(
+    evaluations: dict[str, PositionEvaluation], output_directory: Path
+) -> None:
+    """Write trajectory, error-over-time and RMSE comparison screenshots."""
+    output_directory.mkdir(parents=True, exist_ok=True)
+    _save_trajectory_comparison(
+        evaluations, output_directory / "trajectory_comparison.png"
+    )
+    _save_error_comparison(evaluations, output_directory / "error_over_time.png")
+    _save_rmse_comparison(evaluations, output_directory / "rmse_comparison.png")
 
 
 def _numeric_column(rows: list[dict[str, str]], name: str) -> tuple[np.ndarray, np.ndarray]:
@@ -156,10 +168,26 @@ def save_consistency_plot(
         )
     )
     series = [
-        (*_numeric_column(wheel_rows, "speed_nis"), "Wheel speed NIS", wheel_speed_threshold),
-        (*_numeric_column(wheel_rows, "yaw_rate_nis"), "Wheel yaw-rate NIS", wheel_yaw_threshold),
-        (*_numeric_column(relative_rows, "speed_nis"), "VO/LiDAR speed NIS", relative_speed_threshold),
-        (*_numeric_column(relative_rows, "yaw_rate_nis"), "VO/LiDAR yaw-rate NIS", relative_yaw_threshold),
+        (
+            *_numeric_column(wheel_rows, "speed_nis"),
+            "Wheel speed NIS",
+            wheel_speed_threshold,
+        ),
+        (
+            *_numeric_column(wheel_rows, "yaw_rate_nis"),
+            "Wheel yaw-rate NIS",
+            wheel_yaw_threshold,
+        ),
+        (
+            *_numeric_column(relative_rows, "speed_nis"),
+            "VO/LiDAR speed NIS",
+            relative_speed_threshold,
+        ),
+        (
+            *_numeric_column(relative_rows, "yaw_rate_nis"),
+            "VO/LiDAR yaw-rate NIS",
+            relative_yaw_threshold,
+        ),
     ]
     figure, axes = plt.subplots(2, 2, figsize=(11, 7), sharex=False)
     for axis, (timestamps, values, label, threshold) in zip(axes.flat, series):

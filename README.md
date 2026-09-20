@@ -81,15 +81,19 @@ python -m src.main --mode all --validate
 
 Повний CPU run займає приблизно дві хвилини в поточному середовищі. Він створює:
 
-- `results/run_summary.txt` і `comparison_metrics.csv`;
-- `results/conclusions.md`;
+- `results/comparison_metrics.csv` і `validation_pairs.csv`;
 - `results/estimated_state_<mode>.csv` та diagnostics CSV;
 - `results/visual_odometry.csv` і `lidar_odometry.csv`;
+- `results/trajectory_validation.png`;
 - `results/screenshots/trajectory_comparison.png`;
 - `results/screenshots/error_over_time.png`;
 - `results/screenshots/rmse_comparison.png`;
 - `results/screenshots/filter_consistency.png`;
 - `results/screenshots/metrics_summary.png`.
+
+Текстовий опис і висновки зберігаються у статичному
+[`results/conclusions.md`](results/conclusions.md). Pipeline цей файл не генерує
+і не перезаписує.
 
 Контрольована перевірка slip detector:
 

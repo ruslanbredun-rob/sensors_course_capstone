@@ -36,7 +36,7 @@ flowchart LR
     E --> STATE[estimated_state_mode.csv]
     STATE --> EV[Timestamp matching + rigid SE2 alignment]
     VRS[vrs_gps.csv fix 4] --> EV
-    EV --> OUT[ATE metrics + plots + conclusions]
+    EV --> OUT[ATE tables + plots]
 ```
 
 Усі sensor events зливаються за nanosecond timestamp. За однакового timestamp IMU
@@ -55,7 +55,7 @@ runtime state; readers, frontends і evaluation його не змінюють.
 | `src/camera/` | Stereo pairing, rectification, ORB, essential matrix і metric stereo scale |
 | `src/lidar/` | VLP loader, calibrated points, voxel filter і 2D ICP |
 | `src/fusion/` | EKF, health gating, experiment orchestration і CSV export |
-| `src/evaluation/` | VRS matching, SE(2) alignment, ATE та plots |
+| `src/evaluation/` | VRS matching, SE(2) alignment, ATE, CSV tables та plots |
 
 ## Конфігурація
 
@@ -65,6 +65,9 @@ paths і допустимий часовий крок; `evaluation` — VRS poli
 `lidar_odometry` — параметри frontends; `fusion` — gates і fallback window для
 relative motion. Loader перетворює кожну секцію на окремий immutable dataclass,
 тому сенсорний модуль читає тільки власну групу параметрів.
+
+Runtime створює числові CSV і PNG. Інженерний опис результатів зберігається
+окремо у `results/conclusions.md` та не формується з коду.
 
 ## EKF та update contracts
 

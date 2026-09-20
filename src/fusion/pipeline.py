@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
-from math import hypot
 from pathlib import Path
 
 from src.camera.visual_odometry import VisualOdometryResult, compute_visual_odometry
@@ -12,15 +11,8 @@ from src.common.config import RunConfig
 from src.common.models import Estimate, ImuSample, RelativeMotion, WheelMeasurement
 from src.common.synchronization import ordered_sensor_events
 from src.dataset.readers import read_encoders, read_vrs_reference
+from src.evaluation.artifacts import export_validation_artifacts
 from src.evaluation.metrics import PositionEvaluation, evaluate_position
-from src.evaluation.visualization import (
-    DISPLAY_NAMES,
-    save_comparison_plots,
-    save_consistency_plot,
-    save_metrics_table,
-    save_slip_plot,
-    save_validation_plot,
-)
 from src.fusion.ekf import VehicleEKF
 from src.imu.reader import read_imu
 from src.lidar.odometry import LidarOdometryResult, compute_lidar_odometry
@@ -255,8 +247,12 @@ def _run_filter(
                         event.timestamp_ns,
                         f"{event.speed_m_s:.6f}",
                         f"{event.yaw_rate_rad_s:.6f}",
-                        "" if estimator.last_wheel_nis is None else f"{estimator.last_wheel_nis:.6f}",
-                        "" if estimator.last_wheel_yaw_nis is None else f"{estimator.last_wheel_yaw_nis:.6f}",
+                        ""
+                        if estimator.last_wheel_nis is None
+                        else f"{estimator.last_wheel_nis:.6f}",
+                        ""
+                        if estimator.last_wheel_yaw_nis is None
+                        else f"{estimator.last_wheel_yaw_nis:.6f}",
                         estimator.last_wheel_accepted,
                         estimator.last_wheel_yaw_accepted,
                         slip_active,
@@ -341,7 +337,7 @@ def _evaluate(result: ExperimentResult, reference: list, config: RunConfig) -> N
     )
 
 
-def _write_summary(config: RunConfig, results: list[ExperimentResult]) -> str:
+def _format_summary(results: list[ExperimentResult]) -> str:
     lines = []
     for result in results:
         final = result.states[-1]
@@ -357,341 +353,23 @@ def _write_summary(config: RunConfig, results: list[ExperimentResult]) -> str:
         lines.append(line)
         if result.injected_samples:
             detection_rate = result.detected_injected_samples / result.injected_samples
-            non_fault = result.wheel_updates - result.injected_samples
-            false_rate = result.false_positive_samples / max(non_fault, 1)
+            healthy_samples = result.wheel_updates - result.injected_samples
+            false_rate = result.false_positive_samples / max(healthy_samples, 1)
             lines.append(
                 f"  injected slip: detection={detection_rate:.1%}, "
                 f"false-positive samples={false_rate:.2%}"
             )
-    summary = "\n".join(lines) + "\n"
-    (config.general.output / "run_summary.txt").write_text(summary, encoding="utf-8")
-    return summary
+    return "\n".join(lines) + "\n"
 
 
-def _nis_fraction(path: Path, column: str, threshold: float) -> tuple[int, float]:
-    rows = csv.DictReader(path.open(encoding="utf-8"))
-    values = [float(row[column]) for row in rows if row.get(column)]
-    if not values:
-        return 0, float("nan")
-    return len(values), sum(value <= threshold for value in values) / len(values)
-
-
-def _write_validation_artifacts(
-    config: RunConfig, results: list[ExperimentResult]
-) -> None:
-    evaluations = {
-        result.name: result.evaluation
-        for result in results
-        if result.evaluation is not None
-    }
-    if not evaluations:
-        return
-    typed_evaluations: dict[str, PositionEvaluation] = {
-        name: evaluation
-        for name, evaluation in evaluations.items()
-        if evaluation is not None
-    }
-    screenshot_directory = config.general.output / "screenshots"
-    screenshot_directory.mkdir(parents=True, exist_ok=True)
-    save_comparison_plots(typed_evaluations, screenshot_directory)
-    save_metrics_table(
-        typed_evaluations, screenshot_directory / "metrics_summary.png"
-    )
-
-    best_name, best = min(
-        typed_evaluations.items(), key=lambda item: item[1].rmse_m
-    )
-    save_validation_plot(best, config.general.output / "trajectory_validation.png")
-
-    with (config.general.output / "comparison_metrics.csv").open(
-        "w", newline="", encoding="utf-8"
-    ) as stream:
-        writer = csv.writer(stream, lineterminator="\n")
-        writer.writerow(
-            (
-                "configuration",
-                "matched_vrs_epochs",
-                "rmse_m",
-                "median_m",
-                "p95_m",
-                "final_error_m",
-            )
-        )
-        for name, evaluation in typed_evaluations.items():
-            writer.writerow(
-                (
-                    name,
-                    evaluation.matched_epochs,
-                    f"{evaluation.rmse_m:.6f}",
-                    f"{evaluation.median_m:.6f}",
-                    f"{evaluation.p95_m:.6f}",
-                    f"{evaluation.final_error_m:.6f}",
-                )
-            )
-
-    with (config.general.output / "validation_pairs.csv").open(
-        "w", newline="", encoding="utf-8"
-    ) as stream:
-        writer = csv.writer(stream, lineterminator="\n")
-        writer.writerow(
-            (
-                "configuration",
-                "timestamp_ns",
-                "estimate_time_offset_ms",
-                "vrs_utm_easting_m",
-                "vrs_utm_northing_m",
-                "aligned_est_easting_m",
-                "aligned_est_northing_m",
-                "error_m",
-            )
-        )
-        for name, evaluation in typed_evaluations.items():
-            for index, timestamp in enumerate(evaluation.timestamp_ns):
-                writer.writerow(
-                    (
-                        name,
-                        timestamp,
-                        f"{evaluation.time_offset_ms[index]:.3f}",
-                        f"{evaluation.reference_xy_m[index, 0]:.4f}",
-                        f"{evaluation.reference_xy_m[index, 1]:.4f}",
-                        f"{evaluation.aligned_xy_m[index, 0]:.4f}",
-                        f"{evaluation.aligned_xy_m[index, 1]:.4f}",
-                        f"{evaluation.error_m[index]:.4f}",
-                    )
-                )
-
-    ins_baseline = typed_evaluations.get("base")
-    reference_length_m = sum(
-        hypot(
-            float(current[0] - previous[0]),
-            float(current[1] - previous[1]),
-        )
-        for previous, current in zip(
-            best.reference_xy_m, best.reference_xy_m[1:]
-        )
-    )
-    improvement = (
-        100.0 * (ins_baseline.rmse_m - best.rmse_m) / ins_baseline.rmse_m
-        if ins_baseline is not None
-        else float("nan")
-    )
-    summary_lines = [
-        f"VRS fix={config.evaluation.reference_fix_state}: {best.matched_epochs}/"
-        f"{best.valid_fix_epochs} epochs matched within "
-        f"{config.evaluation.reference_tolerance_ns / 1e6:.0f} ms",
-        f"Reference trajectory length={reference_length_m:.1f} m",
-        "2D ATE uses one rigid SE(2) alignment; trajectory scale is unchanged.",
-    ]
-    for name, evaluation in typed_evaluations.items():
-        summary_lines.append(
-            f"{DISPLAY_NAMES.get(name, name)}: RMSE={evaluation.rmse_m:.3f} m, "
-            f"median={evaluation.median_m:.3f} m, P95={evaluation.p95_m:.3f} m"
-        )
-    if ins_baseline is not None:
-        summary_lines.append(
-            f"Best={DISPLAY_NAMES.get(best_name, best_name)}: "
-            f"improvement over E1 INS baseline="
-            f"{improvement:.1f}%"
-        )
-    (config.general.output / "validation_summary.txt").write_text(
-        "\n".join(summary_lines) + "\n", encoding="utf-8"
-    )
-
-    diagnostic_mode = next(
-        name
-        for name in ("full", "lidar", "visual", "slip", "base")
-        if name in typed_evaluations
-    )
-    save_consistency_plot(
-        config.general.output,
-        diagnostic_mode,
-        wheel_speed_threshold=config.wheel.speed_nis_threshold,
-        wheel_yaw_threshold=config.wheel.yaw_nis_threshold,
-        relative_speed_threshold=config.fusion.relative_speed_nis_threshold,
-        relative_yaw_threshold=config.fusion.relative_yaw_nis_threshold,
-    )
-    save_slip_plot(config.general.output, diagnostic_mode)
-
-    speed_count, speed_below = _nis_fraction(
-        config.general.output / f"diagnostics_{diagnostic_mode}.csv",
-        "speed_nis",
-        config.wheel.speed_nis_threshold,
-    )
-    yaw_count, yaw_below = _nis_fraction(
-        config.general.output / f"diagnostics_{diagnostic_mode}.csv",
-        "yaw_rate_nis",
-        config.wheel.yaw_nis_threshold,
-    )
-    conclusion_lines = [
-        "# Висновки ДЗ 18–19",
-        "",
-        "## Результати на `urban35`",
-        "",
-        "| Конфігурація | RMSE, м | Median, м | P95, м |",
-        "|---|---:|---:|---:|",
-    ]
-    for name, evaluation in typed_evaluations.items():
-        conclusion_lines.append(
-            f"| {DISPLAY_NAMES.get(name, name)} | {evaluation.rmse_m:.3f} | "
-            f"{evaluation.median_m:.3f} | {evaluation.p95_m:.3f} |"
-        )
-    conclusion_lines.extend(
-        (
-            "",
-            (
-                f"Найкращий режим — `{best_name}`: {best.rmse_m:.3f} м RMSE. "
-                + (
-                    f"Покращення відносно E1 Wheel+IMU становить {improvement:.1f}%."
-                    if ins_baseline is not None
-                    else ""
-                )
-            ).rstrip(),
-            f"RMSE пораховано по {best.matched_epochs} VRS epochs уздовж "
-            f"траєкторії {reference_length_m:.0f} м.",
-            "",
-            "## Наш шлях обробки даних",
-            "",
-            "1. `encoder.csv` і `xsens_imu.csv` читаються потоково з перевіркою "
-            "кількості колонок, SI units і строго зростаючих nanosecond timestamps. "
-            "Обидва потоки мають близько 100 Hz, тому жоден із них не є "
-            "низькочастотною зовнішньою поправкою.",
-            "2. Encoder counts через resolution, діаметри коліс і фактичний `dt` "
-            "перетворюються на left/right speed, лінійну швидкість та "
-            "differential-drive course constraint; `x,y` інтегрує EKF.",
-            "3. IMU gyro `z` і acceleration `x` виконують high-rate EKF prediction: "
-            "кутова швидкість поширює orientation/yaw, прискорення — speed. "
-            "IMU-only trajectory не використовується, бо інтегрування acceleration "
-            "без надійної початкової лінійної швидкості швидко накопичує drift.",
-            "4. E1 Base завжди використовує обидва комплементарні джерела: Wheel "
-            "+ IMU. Wheel update коригує speed і gyro bias; EKF записує "
-            "`x, y, yaw, speed` після кожного IMU step.",
-            "5. E2 додає wheel/IMU disagreement detector. Під час slip wheel "
-            "correction пропускається, а IMU prediction продовжується.",
-            "6. Stereo frontend ректифікує пари, знаходить ORB matches, виконує "
-            "RANSAC essential matrix і відновлює metric scale зі disparity. "
-            "LiDAR frontend переводить VLP-16 points у vehicle frame, voxelizes "
-            "їх та оцінює increment через 2D ICP.",
-            "7. Health manager використовує VO лише у degraded wheel interval. "
-            "LiDAR є другим fallback, якщо немає недавньої якісної VO correction. "
-            "Низька quality або NIS вище gate залишають стан попереднього етапу.",
-            "8. `vrs_gps.csv` не читається estimator-ом. Після завершення run "
-            "valid RTK epochs зіставляються за часом, траєкторії один раз "
-            "вирівнюються rigid SE(2) без scale fit, після чого рахується ATE.",
-            "",
-            "## Консистентність і межі",
-            "",
-            f"Для `{diagnostic_mode}` wheel-speed NIS нижче порога "
-            f"{config.wheel.speed_nis_threshold:.3f} у {speed_below:.2%} з "
-            f"{speed_count} перевірених updates; wheel-yaw NIS нижче порога "
-            f"{config.wheel.yaw_nis_threshold:.3f} у {yaw_below:.2%} з "
-            f"{yaw_count} updates. Поточна модель шуму консервативна.",
-            "",
-            "VRS-GPS не надходить у EKF. Він використаний після оцінювання стану "
-            "для часових пар, одного SE(2) вирівнювання без зміни масштабу та "
-            "ATE по всій траєкторії.",
-        )
-    )
-    if any(
-        name in typed_evaluations for name in ("visual", "lidar", "full")
-    ):
-        visual_result = next(
-            (result for result in results if result.name == "visual"), None
-        )
-        lidar_result = next(
-            (result for result in results if result.name == "lidar"), None
-        )
-        slip_result = next(
-            (result for result in results if result.name == "slip"), None
-        )
-        fallback_details = []
-        if visual_result is not None:
-            fallback_details.append(
-                f"VO: {visual_result.relative_updates}/"
-                f"{visual_result.available_relative_updates} corrections"
-            )
-        if lidar_result is not None:
-            fallback_details.append(
-                f"LiDAR без камер: {lidar_result.relative_updates}/"
-                f"{lidar_result.available_relative_updates} corrections"
-            )
-        conclusion_lines.extend(
-            (
-                "",
-                "Strict health gating не дозволив VO або LiDAR погіршити E2. "
-                + (
-                    "На звичайній послідовності використано "
-                    + "; ".join(fallback_details)
-                    + ". "
-                    if fallback_details
-                    else ""
-                )
-                + "Frontends повністю обробили дані, але estimator приймав "
-                "correction лише під час degraded wheel interval.",
-                "",
-                "## Чому VO та LiDAR майже не покращили результат",
-                "",
-                "Саме `urban35` є легкою послідовністю для Wheel+IMU: обидва "
-                "потоки працюють приблизно зі 100 Hz, рух переважно плавний, а "
-                + (
-                    f"slip detector був активний лише для "
-                    f"{slip_result.slip_samples} із "
-                    f"{slip_result.wheel_updates} wheel samples "
-                    f"({slip_result.slip_samples / slip_result.wheel_updates:.2%}). "
-                    if slip_result is not None
-                    else "природна деградація коліс була короткою. "
-                )
-                + "Тому E2 вже добре відтворює форму траєкторії, а зовнішнім "
-                "сенсорам майже нічого виправляти.",
-                "",
-                "Реалізовані frontends не є повноцінними VIO/LIO. Stereo VO "
-                "не оптимізує features разом з IMU state, а LiDAR ICP не робить "
-                "IMU deskew rolling scan. При постійному fusion їхні noisy "
-                "increments трохи погіршували RMSE, тому health manager "
-                "використовує їх лише як fallback. На цій послідовності це "
-                "означає практично однаковий результат E2, E2+VO та E2+LiDAR.",
-                "",
-                "## Порівняння з VIO та LIO",
-                "",
-                "Поточна система є **loosely coupled**: stereo VO та LiDAR ICP "
-                "спочатку окремо оцінюють relative motion, після чого EKF отримує "
-                "лише speed/yaw-rate correction. Cross-covariance features, "
-                "point clouds, IMU bias і state при цьому втрачається.",
-                "",
-                "**VIO** спільно оптимізує camera reprojection residuals, IMU "
-                "preintegration, pose, velocity і biases. Це краще утримує scale "
-                "та orientation, але потребує точної camera–IMU calibration, "
-                "ініціалізації й складнішого nonlinear solver.",
-                "",
-                "**LIO** використовує IMU для deskew кожного LiDAR scan і спільно "
-                "оцінює trajectory та scan residuals. Це прямо усуває основну "
-                "проблему нашого VLP-16 ICP — rolling motion distortion. Ціна — "
-                "точна time/extrinsic calibration, більший state і суттєво більше "
-                "обчислень.",
-            )
-        )
-    result_for_detector = next(
-        (result for result in results if result.injected_samples), None
-    )
-    if result_for_detector is not None:
-        detection = (
-            result_for_detector.detected_injected_samples
-            / result_for_detector.injected_samples
-        )
-        healthy = result_for_detector.wheel_updates - result_for_detector.injected_samples
-        false_rate = result_for_detector.false_positive_samples / max(healthy, 1)
-        conclusion_lines.extend(
-            (
-                "",
-                "## Контрольована перевірка slip detector",
-                "",
-                f"Detection rate: {detection:.1%}; false-positive samples: "
-                f"{false_rate:.2%}. Під час fault interval wheel updates "
-                "відкидаються, а EKF продовжує predict за IMU.",
-            )
-        )
-    (config.general.output / "conclusions.md").write_text(
-        "\n".join(conclusion_lines) + "\n", encoding="utf-8"
-    )
+def _evaluations(
+    results: list[ExperimentResult],
+) -> dict[str, PositionEvaluation]:
+    evaluations = {}
+    for result in results:
+        if result.evaluation is not None:
+            evaluations[result.name] = result.evaluation
+    return evaluations
 
 
 def run(
@@ -745,6 +423,6 @@ def run(
         reference = list(read_vrs_reference(config.general.dataset))
         for result in results:
             _evaluate(result, reference, config)
-    print(_write_summary(config, results), end="")
+    print(_format_summary(results), end="")
     if validate:
-        _write_validation_artifacts(config, results)
+        export_validation_artifacts(config, _evaluations(results))
