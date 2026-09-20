@@ -11,13 +11,14 @@ import cv2
 import numpy as np
 
 from src.common.config import RunConfig
-from src.common.models import RelativeMotion
+from src.common.models import RelativeMotion, RelativePoseEpoch, WheelMeasurement
 from src.dataset.calibration import read_rigid_transform
 
 
 @dataclass(frozen=True)
 class VisualOdometryResult:
     motions: list[RelativeMotion]
+    epochs: list[RelativePoseEpoch]
     attempted_pairs: int
     rejected_pairs: int
 
@@ -72,11 +73,12 @@ class _StereoFrontend:
         )
         self.focal_px = float(self.k[0, 0])
         self.baseline_m = float(-right_p[0, 3] / right_p[0, 0])
-        sensor_to_vehicle, _ = read_rigid_transform(
+        sensor_to_vehicle, sensor_origin_in_vehicle = read_rigid_transform(
             calibration / "Vehicle2Stereo.txt"
         )
         # Rectification maps original-camera coordinates into rectified ones.
         self.rectified_to_vehicle = sensor_to_vehicle @ left_r.T
+        self.sensor_origin_in_vehicle = sensor_origin_in_vehicle
         self.orb = cv2.ORB_create(
             nfeatures=1800, scaleFactor=1.2, nlevels=8, fastThreshold=15
         )
@@ -114,7 +116,11 @@ class _StereoFrontend:
         )
 
     def estimate(
-        self, previous: _StereoFrame, current: _StereoFrame, config: RunConfig
+        self,
+        previous: _StereoFrame,
+        current: _StereoFrame,
+        config: RunConfig,
+        motion_direction: float = 1.0,
     ) -> RelativeMotion | None:
         if previous.descriptors is None or current.descriptors is None:
             return None
@@ -201,15 +207,20 @@ class _StereoFrontend:
         scale_mad = float(1.4826 * np.median(np.abs(np.abs(scales) - metric_scale)))
 
         camera_delta = -rotation_21.T @ (direction * metric_scale)
-        vehicle_delta = self.rectified_to_vehicle @ camera_delta
-        # urban35 is a forward-driving run. Essential-matrix translation sign
-        # becomes ambiguous for far scenes, so use the known motion direction.
-        if vehicle_delta[0] < 0.0:
-            vehicle_delta *= -1.0
         vehicle_rotation = (
             self.rectified_to_vehicle
             @ rotation_21.T
             @ self.rectified_to_vehicle.T
+        )
+        sensor_delta = self.rectified_to_vehicle @ camera_delta
+        if sensor_delta[0] * motion_direction < 0.0:
+            sensor_delta *= -1.0
+        # Conjugate the full sensor transform. The lever-arm term matters on
+        # turns because the camera is about 1.6 m ahead of the vehicle origin.
+        vehicle_delta = (
+            sensor_delta
+            + self.sensor_origin_in_vehicle
+            - vehicle_rotation @ self.sensor_origin_in_vehicle
         )
         yaw = math.atan2(vehicle_rotation[1, 0], vehicle_rotation[0, 0])
         dt_s = (current.timestamp_ns - previous.timestamp_ns) * 1e-9
@@ -217,9 +228,9 @@ class _StereoFrontend:
             raise ValueError("Stereo timestamps are not strictly increasing")
         speed = float(vehicle_delta[0] / dt_s)
         if (
-            speed <= 0.0
-            or speed > config.visual_odometry.max_speed_m_s
-            or abs(vehicle_delta[1]) > max(1.5, 0.5 * vehicle_delta[0])
+            abs(speed) > config.visual_odometry.max_speed_m_s
+            or speed * motion_direction <= 0.0
+            or abs(vehicle_delta[1]) > max(1.5, 0.5 * abs(vehicle_delta[0]))
             or abs(yaw / dt_s) > 1.5
         ):
             return None
@@ -248,6 +259,31 @@ def _timestamped_files(directory: Path, suffix: str) -> dict[int, Path]:
             raise ValueError(f"{path}: filename must be a nanosecond timestamp") from exc
         files[timestamp] = path
     return files
+
+
+def _frame_timestamps(config: RunConfig) -> list[int]:
+    dataset = config.general.dataset
+    left = _timestamped_files(dataset / "image" / "stereo_left", "png")
+    right = _timestamped_files(dataset / "image" / "stereo_right", "png")
+    return sorted(set(left).intersection(right))[:: config.visual_odometry.frame_step]
+
+
+def _motion_direction(
+    wheels: list[WheelMeasurement], wheel_timestamps: list[int], timestamp_ns: int
+) -> float:
+    if not wheels:
+        return 1.0
+    position = int(np.searchsorted(wheel_timestamps, timestamp_ns))
+    candidates = [
+        index for index in (position - 1, position) if 0 <= index < len(wheels)
+    ]
+    if not candidates:
+        return 1.0
+    nearest = min(
+        candidates,
+        key=lambda index: abs(wheel_timestamps[index] - timestamp_ns),
+    )
+    return -1.0 if wheels[nearest].speed_m_s < -0.2 else 1.0
 
 
 def _write_motions(path: Path, motions: list[RelativeMotion]) -> None:
@@ -280,24 +316,56 @@ def _write_motions(path: Path, motions: list[RelativeMotion]) -> None:
             )
 
 
-def compute_visual_odometry(config: RunConfig) -> VisualOdometryResult:
+def read_visual_odometry(config: RunConfig) -> VisualOdometryResult:
+    """Load cached accepted increments and recover all frontend epochs."""
+    path = config.general.output / "visual_odometry.csv"
+    motions: list[RelativeMotion] = []
+    with path.open(newline="", encoding="utf-8") as stream:
+        for row in csv.DictReader(stream):
+            motions.append(
+                RelativeMotion(
+                    int(row["timestamp_ns"]),
+                    float(row["dt_s"]),
+                    float(row["dx_m"]),
+                    float(row["dy_m"]),
+                    float(row["dyaw_rad"]),
+                    "visual",
+                    float(row["translation_std_m"]),
+                    float(row["yaw_std_rad"]),
+                    float(row["quality"]),
+                )
+            )
+    timestamps = _frame_timestamps(config)
+    epochs = [RelativePoseEpoch(timestamp, "visual") for timestamp in timestamps]
+    attempted = max(0, len(timestamps) - 1)
+    return VisualOdometryResult(motions, epochs, attempted, attempted - len(motions))
+
+
+def compute_visual_odometry(
+    config: RunConfig, wheels: list[WheelMeasurement] | None = None
+) -> VisualOdometryResult:
     """Run stereo VO and persist accepted relative motions for inspection."""
     dataset = config.general.dataset
     left = _timestamped_files(dataset / "image" / "stereo_left", "png")
     right = _timestamped_files(dataset / "image" / "stereo_right", "png")
-    timestamps = sorted(set(left).intersection(right))[
-        :: config.visual_odometry.frame_step
-    ]
+    timestamps = sorted(set(left).intersection(right))[:: config.visual_odometry.frame_step]
     if len(timestamps) < 2:
         raise FileNotFoundError("At least two timestamp-matched stereo pairs are required")
     frontend = _StereoFrontend(config)
     previous = frontend.read_frame(timestamps[0], left[timestamps[0]], right[timestamps[0]])
     motions: list[RelativeMotion] = []
     rejected = 0
+    wheel_hints = wheels or []
+    wheel_timestamps = [sample.timestamp_ns for sample in wheel_hints]
     for timestamp in timestamps[1:]:
         current = frontend.read_frame(timestamp, left[timestamp], right[timestamp])
         try:
-            motion = frontend.estimate(previous, current, config)
+            motion = frontend.estimate(
+                previous,
+                current,
+                config,
+                _motion_direction(wheel_hints, wheel_timestamps, timestamp),
+            )
         except cv2.error:
             motion = None
         if motion is None:
@@ -306,4 +374,5 @@ def compute_visual_odometry(config: RunConfig) -> VisualOdometryResult:
             motions.append(motion)
         previous = current
     _write_motions(config.general.output / "visual_odometry.csv", motions)
-    return VisualOdometryResult(motions, len(timestamps) - 1, rejected)
+    epochs = [RelativePoseEpoch(timestamp, "visual") for timestamp in timestamps]
+    return VisualOdometryResult(motions, epochs, len(timestamps) - 1, rejected)

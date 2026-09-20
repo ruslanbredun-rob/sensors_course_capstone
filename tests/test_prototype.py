@@ -39,6 +39,7 @@ class PrototypeTests(unittest.TestCase):
         self.assertGreater(config.imu.gyro_std_rad_s, 0.0)
         self.assertGreater(config.wheel.speed_nis_threshold, 0.0)
         self.assertGreater(config.visual_odometry.min_matches, 0)
+        self.assertLessEqual(config.visual_odometry.min_fusion_coverage, 1.0)
         self.assertGreater(config.lidar_odometry.voxel_m, 0.0)
 
     def test_slip_detector_debounces_disagreement(self) -> None:
@@ -88,6 +89,7 @@ class PrototypeTests(unittest.TestCase):
         )
         self.assertEqual((result.valid_fix_epochs, result.matched_epochs), (4, 4))
         self.assertLess(result.rmse_m, 1e-10)
+        self.assertLess(result.start_error_m[0], 1e-10)
         scaled = [
             PositionReference(
                 sample.timestamp_ns,
@@ -190,6 +192,27 @@ class PrototypeTests(unittest.TestCase):
         self.assertTrue(filter_.last_relative_speed_accepted)
         self.assertTrue(filter_.last_relative_yaw_accepted)
         self.assertGreater(filter_.x[4], 0.0)
+
+    def test_relative_pose_updates_position_and_yaw(self) -> None:
+        config = load_config(Path("config/default.json"))
+        filter_ = VehicleEKF(config)
+        filter_.predict(ImuSample(0, 0.0, 0.0))
+        filter_.store_relative_pose_anchor("test", 0)
+        result = filter_.update_relative_pose(
+            RelativeMotion(
+                timestamp_ns=100_000_000,
+                dt_s=0.1,
+                dx_m=1.0,
+                dy_m=0.2,
+                dyaw_rad=0.05,
+                source="test",
+                translation_std_m=0.05,
+                yaw_std_rad=0.01,
+            )
+        )
+        self.assertTrue(filter_.last_relative_pose_accepted)
+        self.assertGreater(result.x_m, 0.9)
+        self.assertGreater(result.yaw_rad, 0.01)
 
     def test_lidar_rigid_fit_recovers_planar_transform(self) -> None:
         import numpy as np

@@ -58,6 +58,7 @@ class VisualOdometryConfig:
     min_matches: int
     min_quality: float
     max_speed_m_s: float
+    min_fusion_coverage: float
 
 
 @dataclass(frozen=True)
@@ -69,12 +70,15 @@ class LidarOdometryConfig:
     min_inlier_ratio: float
     min_quality: float
     initial_speed_m_s: float
+    min_fusion_coverage: float
 
 
 @dataclass(frozen=True)
 class FusionConfig:
     relative_speed_nis_threshold: float
     relative_yaw_nis_threshold: float
+    relative_pose_nis_threshold: float
+    relative_pose_max_covariance_scale: float
     relative_fallback_window_s: float
 
 
@@ -170,7 +174,14 @@ def load_config(
     _positive(
         visual,
         "visual_odometry",
-        ("frame_step", "image_scale", "min_matches", "min_quality", "max_speed_m_s"),
+        (
+            "frame_step",
+            "image_scale",
+            "min_matches",
+            "min_quality",
+            "max_speed_m_s",
+            "min_fusion_coverage",
+        ),
         config_path,
     )
     _positive(
@@ -184,15 +195,26 @@ def load_config(
             "min_inlier_ratio",
             "min_quality",
             "initial_speed_m_s",
+            "min_fusion_coverage",
         ),
         config_path,
     )
+    for section_name, section in (
+        ("visual_odometry", visual),
+        ("lidar_odometry", lidar),
+    ):
+        if float(section["min_fusion_coverage"]) > 1.0:
+            raise ValueError(
+                f"{config_path}: {section_name}.min_fusion_coverage must be <= 1"
+            )
     _positive(
         fusion,
         "fusion",
         (
             "relative_speed_nis_threshold",
             "relative_yaw_nis_threshold",
+            "relative_pose_nis_threshold",
+            "relative_pose_max_covariance_scale",
             "relative_fallback_window_s",
         ),
         config_path,
@@ -239,6 +261,7 @@ def load_config(
             min_matches=int(visual["min_matches"]),
             min_quality=float(visual["min_quality"]),
             max_speed_m_s=float(visual["max_speed_m_s"]),
+            min_fusion_coverage=float(visual["min_fusion_coverage"]),
         ),
         lidar_odometry=LidarOdometryConfig(
             frame_step=int(lidar["frame_step"]),
@@ -248,10 +271,15 @@ def load_config(
             min_inlier_ratio=float(lidar["min_inlier_ratio"]),
             min_quality=float(lidar["min_quality"]),
             initial_speed_m_s=float(lidar["initial_speed_m_s"]),
+            min_fusion_coverage=float(lidar["min_fusion_coverage"]),
         ),
         fusion=FusionConfig(
             relative_speed_nis_threshold=float(fusion["relative_speed_nis_threshold"]),
             relative_yaw_nis_threshold=float(fusion["relative_yaw_nis_threshold"]),
+            relative_pose_nis_threshold=float(fusion["relative_pose_nis_threshold"]),
+            relative_pose_max_covariance_scale=float(
+                fusion["relative_pose_max_covariance_scale"]
+            ),
             relative_fallback_window_s=float(fusion["relative_fallback_window_s"]),
         ),
     )

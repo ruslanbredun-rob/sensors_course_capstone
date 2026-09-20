@@ -1,7 +1,7 @@
 {
   "general": {
     "dataset": "data/complex_urban/urban35",
-    "output": "results",
+    "output": "results/urban35",
     "max_dt_s": 0.1
   },
   "evaluation": {
@@ -34,7 +34,8 @@
     "image_scale": 0.5,
     "min_matches": 45,
     "min_quality": 0.45,
-    "max_speed_m_s": 40.0
+    "max_speed_m_s": 40.0,
+    "min_fusion_coverage": 0.3
   },
   "lidar_odometry": {
     "frame_step": 1,
@@ -43,11 +44,14 @@
     "max_rmse_m": 0.8,
     "min_inlier_ratio": 0.35,
     "min_quality": 0.6,
-    "initial_speed_m_s": 15.0
+    "initial_speed_m_s": 15.0,
+    "min_fusion_coverage": 0.3
   },
   "fusion": {
     "relative_speed_nis_threshold": 6.635,
     "relative_yaw_nis_threshold": 6.635,
+    "relative_pose_nis_threshold": 11.345,
+    "relative_pose_max_covariance_scale": 100.0,
     "relative_fallback_window_s": 0.3
   }
 }

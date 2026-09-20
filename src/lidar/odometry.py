@@ -12,13 +12,14 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from src.common.config import RunConfig
-from src.common.models import RelativeMotion, WheelMeasurement
+from src.common.models import RelativeMotion, RelativePoseEpoch, WheelMeasurement
 from src.dataset.calibration import read_rigid_transform
 
 
 @dataclass(frozen=True)
 class LidarOdometryResult:
     motions: list[RelativeMotion]
+    epochs: list[RelativePoseEpoch]
     attempted_pairs: int
     rejected_pairs: int
 
@@ -167,6 +168,33 @@ def _write_motions(path: Path, motions: list[RelativeMotion]) -> None:
             )
 
 
+def read_lidar_odometry(config: RunConfig) -> LidarOdometryResult:
+    """Load cached accepted increments and recover all scan epochs."""
+    path = config.general.output / "lidar_odometry.csv"
+    motions: list[RelativeMotion] = []
+    with path.open(newline="", encoding="utf-8") as stream:
+        for row in csv.DictReader(stream):
+            motions.append(
+                RelativeMotion(
+                    int(row["timestamp_ns"]),
+                    float(row["dt_s"]),
+                    float(row["dx_m"]),
+                    float(row["dy_m"]),
+                    float(row["dyaw_rad"]),
+                    "lidar",
+                    float(row["translation_std_m"]),
+                    float(row["yaw_std_rad"]),
+                    float(row["quality"]),
+                )
+            )
+    scans = _timestamped_scans(
+        config.general.dataset / "sensor_data" / "VLP_left"
+    )[:: config.lidar_odometry.frame_step]
+    epochs = [RelativePoseEpoch(timestamp, "lidar") for timestamp, _ in scans]
+    attempted = max(0, len(scans) - 1)
+    return LidarOdometryResult(motions, epochs, attempted, attempted - len(motions))
+
+
 def compute_lidar_odometry(
     config: RunConfig, wheels: list[WheelMeasurement] | None = None
 ) -> LidarOdometryResult:
@@ -241,11 +269,8 @@ def compute_lidar_odometry(
                 dy_m=float(result.translation_m[1]),
                 dyaw_rad=result.yaw_rad,
                 source="lidar",
-                # Scan-to-scan translation is useful, while VLP-16 rolling
-                # acquisition makes the planar yaw increment visibly biased
-                # on this fast sequence. Keep yaw as a weak consistency cue.
-                translation_std_m=max(0.75, 2.0 * result.rmse_m),
-                yaw_std_rad=0.3,
+                translation_std_m=max(0.08, 0.5 * result.rmse_m),
+                yaw_std_rad=max(0.003, 0.015 * (1.0 - quality)),
                 quality=quality,
             )
             motions.append(motion)
@@ -257,4 +282,5 @@ def compute_lidar_odometry(
         previous_timestamp = timestamp
         previous_points = current_points
     _write_motions(config.general.output / "lidar_odometry.csv", motions)
-    return LidarOdometryResult(motions, len(scans) - 1, rejected)
+    epochs = [RelativePoseEpoch(timestamp, "lidar") for timestamp, _ in scans]
+    return LidarOdometryResult(motions, epochs, len(scans) - 1, rejected)

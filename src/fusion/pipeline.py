@@ -6,16 +6,30 @@ import csv
 from dataclasses import dataclass
 from pathlib import Path
 
-from src.camera.visual_odometry import VisualOdometryResult, compute_visual_odometry
+from src.camera.visual_odometry import (
+    VisualOdometryResult,
+    compute_visual_odometry,
+    read_visual_odometry,
+)
 from src.common.config import RunConfig
-from src.common.models import Estimate, ImuSample, RelativeMotion, WheelMeasurement
+from src.common.models import (
+    Estimate,
+    ImuSample,
+    RelativeMotion,
+    RelativePoseEpoch,
+    WheelMeasurement,
+)
 from src.common.synchronization import ordered_sensor_events
 from src.dataset.readers import read_encoders, read_vrs_reference
 from src.evaluation.artifacts import export_validation_artifacts
 from src.evaluation.metrics import PositionEvaluation, evaluate_position
 from src.fusion.ekf import VehicleEKF
 from src.imu.reader import read_imu
-from src.lidar.odometry import LidarOdometryResult, compute_lidar_odometry
+from src.lidar.odometry import (
+    LidarOdometryResult,
+    compute_lidar_odometry,
+    read_lidar_odometry,
+)
 from src.wheel.odometry import (
     inject_right_wheel_scale_fault,
     read_encoder_calibration,
@@ -140,6 +154,7 @@ def _run_filter(
     name: str,
     wheels: list[WheelMeasurement],
     relative_streams: list[list[RelativeMotion]] | None = None,
+    relative_epoch_streams: list[list[RelativePoseEpoch]] | None = None,
     *,
     max_events: int | None,
 ) -> ExperimentResult:
@@ -161,10 +176,7 @@ def _run_filter(
     wheel_count = rejected = slip_samples = 0
     injected = detected_injected = false_positive = 0
     relative_count = rejected_relative = relative_available = 0
-    slip_active_current = False
-    first_wheel_timestamp_ns: int | None = None
-    wheel_unhealthy_until_ns = -1
-    last_visual_update_ns = -1
+    last_lidar_motion_ns = -1
     event_count = 0
     diagnostics_path = config.general.output / f"diagnostics_{name}.csv"
     relative_path = config.general.output / f"diagnostics_relative_{name}.csv"
@@ -199,11 +211,16 @@ def _run_filter(
                 "yaw_rate_nis",
                 "speed_accepted",
                 "yaw_rate_accepted",
+                "pose_nis",
+                "pose_accepted",
+                "covariance_scale",
+                "update_kind",
                 "used_as_correction",
             )
         )
         streams = [read_imu(config.general.dataset), wheels]
         streams.extend(relative_streams or [])
+        streams.extend(relative_epoch_streams or [])
         for event in ordered_sensor_events(*streams):
             if isinstance(event, ImuSample):
                 estimate = estimator.predict(event)
@@ -211,8 +228,6 @@ def _run_filter(
             elif isinstance(event, WheelMeasurement):
                 if estimator.timestamp_ns is None or estimator.current_imu is None:
                     continue
-                if first_wheel_timestamp_ns is None:
-                    first_wheel_timestamp_ns = event.timestamp_ns
                 slip_active = False
                 if detector is not None:
                     decision = detector.update(
@@ -221,8 +236,7 @@ def _run_filter(
                         float(estimator.x[4]),
                     )
                     slip_active = decision.active
-                slip_active_current = slip_active
-                estimator.update_wheel(
+                estimate = estimator.update_wheel(
                     event,
                     use_yaw_rate=use_kinematics,
                     reject=slip_active,
@@ -233,15 +247,6 @@ def _run_filter(
                 injected += int(event.fault_injected)
                 detected_injected += int(event.fault_injected and slip_active)
                 false_positive += int(not event.fault_injected and slip_active)
-                beyond_initialization = (
-                    event.timestamp_ns - first_wheel_timestamp_ns > int(1e9)
-                )
-                if slip_active or (
-                    beyond_initialization and not estimator.last_wheel_accepted
-                ):
-                    wheel_unhealthy_until_ns = event.timestamp_ns + int(
-                        config.fusion.relative_fallback_window_s * 1e9
-                    )
                 writer.writerow(
                     (
                         event.timestamp_ns,
@@ -259,39 +264,43 @@ def _run_filter(
                         event.fault_injected,
                     )
                 )
+            elif isinstance(event, RelativePoseEpoch):
+                if estimator.timestamp_ns is None or estimator.current_imu is None:
+                    continue
+                estimator.store_relative_pose_anchor(event.source, event.timestamp_ns)
             else:
                 if estimator.timestamp_ns is None or estimator.current_imu is None:
                     continue
                 relative_available += 1
-                wheel_degraded = (
-                    slip_active_current
-                    or event.timestamp_ns <= wheel_unhealthy_until_ns
-                )
-                use_correction = wheel_degraded
                 if event.source == "lidar":
-                    # LiDAR is the second fallback: use it only if no recent
-                    # healthy visual increment already covered this interval.
-                    use_correction = use_correction and (
-                        event.timestamp_ns - last_visual_update_ns
-                        > int(config.fusion.relative_fallback_window_s * 1e9)
-                    )
+                    last_lidar_motion_ns = event.timestamp_ns
+                lidar_recent = (
+                    last_lidar_motion_ns >= 0
+                    and event.timestamp_ns - last_lidar_motion_ns
+                    <= int(config.fusion.relative_fallback_window_s * 1e9)
+                )
+                # VO and LO share much of the same vehicle motion and are not
+                # independent. In the combined mode, prefer the substantially
+                # lower-noise LiDAR increment and use VO only across LO gaps.
+                use_correction = not (
+                    name == "full" and event.source == "visual" and lidar_recent
+                )
                 if use_correction:
-                    estimator.update_relative_motion(event)
-                    relative_count += 1
-                    accepted = bool(
-                        estimator.last_relative_speed_accepted
-                        and estimator.last_relative_yaw_accepted
+                    estimate = estimator.update_relative_pose(event)
+                    accepted = bool(estimator.last_relative_pose_accepted)
+                    pose_nis = f"{estimator.last_relative_pose_nis:.6f}"
+                    pose_accepted = estimator.last_relative_pose_accepted
+                    covariance_scale = (
+                        f"{estimator.last_relative_pose_covariance_scale:.6f}"
                     )
+                    update_kind = "pose"
+                    relative_count += 1
                     rejected_relative += int(not accepted)
-                    if event.source == "visual" and accepted:
-                        last_visual_update_ns = event.timestamp_ns
-                    speed_nis = f"{estimator.last_relative_speed_nis:.6f}"
-                    yaw_nis = f"{estimator.last_relative_yaw_nis:.6f}"
-                    speed_accepted = estimator.last_relative_speed_accepted
-                    yaw_accepted = estimator.last_relative_yaw_accepted
                 else:
-                    speed_nis = yaw_nis = ""
-                    speed_accepted = yaw_accepted = False
+                    pose_nis = covariance_scale = update_kind = ""
+                    pose_accepted = False
+                speed_nis = yaw_nis = ""
+                speed_accepted = yaw_accepted = False
                 relative_writer.writerow(
                     (
                         event.timestamp_ns,
@@ -304,6 +313,10 @@ def _run_filter(
                         yaw_nis,
                         speed_accepted,
                         yaw_accepted,
+                        pose_nis,
+                        pose_accepted,
+                        covariance_scale,
+                        update_kind,
                         use_correction,
                     )
                 )
@@ -372,6 +385,10 @@ def _evaluations(
     return evaluations
 
 
+def _frontend_ready(accepted: int, attempted: int, minimum_coverage: float) -> bool:
+    return attempted > 0 and accepted / attempted >= minimum_coverage
+
+
 def run(
     config: RunConfig,
     mode: str,
@@ -379,23 +396,46 @@ def run(
     max_events: int | None = None,
     validate: bool = False,
     inject_slip: bool = False,
+    reuse_frontends: bool = False,
 ) -> None:
     _require_inputs(config.general.dataset, mode=mode, validate=validate)
     config.general.output.mkdir(parents=True, exist_ok=True)
     wheels = _load_wheels(config, inject_slip=inject_slip)
     visual: VisualOdometryResult | None = None
+    visual_ready = False
     if mode in ("visual", "full", "all"):
-        visual = compute_visual_odometry(config)
+        visual = (
+            read_visual_odometry(config)
+            if reuse_frontends
+            else compute_visual_odometry(config, wheels)
+        )
+        visual_ready = _frontend_ready(
+            len(visual.motions),
+            visual.attempted_pairs,
+            config.visual_odometry.min_fusion_coverage,
+        )
         print(
             f"visual frontend: accepted={len(visual.motions)}/"
-            f"{visual.attempted_pairs}, rejected={visual.rejected_pairs}"
+            f"{visual.attempted_pairs}, rejected={visual.rejected_pairs}, "
+            f"fusion={'enabled' if visual_ready else 'disabled (low coverage)'}"
         )
     lidar: LidarOdometryResult | None = None
+    lidar_ready = False
     if mode in ("lidar", "full", "all"):
-        lidar = compute_lidar_odometry(config, wheels)
+        lidar = (
+            read_lidar_odometry(config)
+            if reuse_frontends
+            else compute_lidar_odometry(config, wheels)
+        )
+        lidar_ready = _frontend_ready(
+            len(lidar.motions),
+            lidar.attempted_pairs,
+            config.lidar_odometry.min_fusion_coverage,
+        )
         print(
             f"lidar frontend: accepted={len(lidar.motions)}/"
-            f"{lidar.attempted_pairs}, rejected={lidar.rejected_pairs}"
+            f"{lidar.attempted_pairs}, rejected={lidar.rejected_pairs}, "
+            f"fusion={'enabled' if lidar_ready else 'disabled (low coverage)'}"
         )
     modes = (
         ["base", "slip", "visual", "lidar", "full"]
@@ -405,16 +445,20 @@ def run(
     results = []
     for name in modes:
         relative_streams = []
-        if name in ("visual", "full") and visual:
+        relative_epoch_streams = []
+        if name in ("visual", "full") and visual and visual_ready:
             relative_streams.append(visual.motions)
-        if name in ("lidar", "full") and lidar:
+            relative_epoch_streams.append(visual.epochs)
+        if name in ("lidar", "full") and lidar and lidar_ready:
             relative_streams.append(lidar.motions)
+            relative_epoch_streams.append(lidar.epochs)
         results.append(
             _run_filter(
                 config,
                 name,
                 wheels,
                 relative_streams,
+                relative_epoch_streams,
                 max_events=max_events,
             )
         )

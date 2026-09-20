@@ -38,6 +38,11 @@ def main() -> None:
         action="store_true",
         help="Inject a labelled right-wheel scale fault for detector evaluation",
     )
+    parser.add_argument(
+        "--reuse-frontends",
+        action="store_true",
+        help="Reuse visual_odometry.csv and lidar_odometry.csv from --output",
+    )
     args = parser.parse_args()
     if args.max_events is not None and args.max_events <= 0:
         parser.error("--max-events must be positive")
@@ -48,6 +53,7 @@ def main() -> None:
         max_events=args.max_events,
         validate=args.validate,
         inject_slip=args.inject_slip,
+        reuse_frontends=args.reuse_frontends,
     )
 
 
