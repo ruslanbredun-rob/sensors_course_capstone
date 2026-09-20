@@ -10,9 +10,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .calibration import read_rigid_transform
-from .config import RunConfig
-from .models import RelativeMotion
+from src.common.config import RunConfig
+from src.common.models import RelativeMotion
+from src.dataset.calibration import read_rigid_transform
 
 
 @dataclass(frozen=True)
@@ -43,11 +43,11 @@ def _opencv_matrix(path: Path, key: str) -> np.ndarray:
 
 class _StereoFrontend:
     def __init__(self, config: RunConfig) -> None:
-        calibration = config.dataset / "calibration"
+        calibration = config.general.dataset / "calibration"
         left_path = calibration / "left.yaml"
         right_path = calibration / "right.yaml"
-        width = int(1280 * config.visual_image_scale)
-        height = int(560 * config.visual_image_scale)
+        width = int(1280 * config.visual_odometry.image_scale)
+        height = int(560 * config.visual_odometry.image_scale)
         self.size = (width, height)
 
         left_k = _opencv_matrix(left_path, "camera_matrix")
@@ -59,7 +59,7 @@ class _StereoFrontend:
         right_r = _opencv_matrix(right_path, "rectification_matrix")
         right_p = _opencv_matrix(right_path, "projection_matrix")
 
-        scale = config.visual_image_scale
+        scale = config.visual_odometry.image_scale
         self.k = left_p[:, :3].copy()
         self.k[:2] *= scale
         right_new_k = right_p[:, :3].copy()
@@ -122,7 +122,7 @@ class _StereoFrontend:
             previous.descriptors, current.descriptors, k=2
         )
         good = [first for first, second in matches if first.distance < 0.75 * second.distance]
-        if len(good) < config.visual_min_matches:
+        if len(good) < config.visual_odometry.min_matches:
             return None
         points_previous = np.float32(
             [previous.keypoints[match.queryIdx].pt for match in good]
@@ -147,7 +147,7 @@ class _StereoFrontend:
             self.k,
             mask=inlier_mask,
         )
-        if inliers < config.visual_min_matches // 2:
+        if inliers < config.visual_odometry.min_matches // 2:
             return None
 
         valid = pose_mask.ravel() > 0
@@ -218,13 +218,13 @@ class _StereoFrontend:
         speed = float(vehicle_delta[0] / dt_s)
         if (
             speed <= 0.0
-            or speed > config.visual_max_speed_m_s
+            or speed > config.visual_odometry.max_speed_m_s
             or abs(vehicle_delta[1]) > max(1.5, 0.5 * vehicle_delta[0])
             or abs(yaw / dt_s) > 1.5
         ):
             return None
         quality = min(1.0, inliers / max(len(good), 1))
-        if quality < config.visual_min_quality:
+        if quality < config.visual_odometry.min_quality:
             return None
         return RelativeMotion(
             timestamp_ns=current.timestamp_ns,
@@ -282,9 +282,12 @@ def _write_motions(path: Path, motions: list[RelativeMotion]) -> None:
 
 def compute_visual_odometry(config: RunConfig) -> VisualOdometryResult:
     """Run stereo VO and persist accepted relative motions for inspection."""
-    left = _timestamped_files(config.dataset / "image" / "stereo_left", "png")
-    right = _timestamped_files(config.dataset / "image" / "stereo_right", "png")
-    timestamps = sorted(set(left).intersection(right))[:: config.visual_frame_step]
+    dataset = config.general.dataset
+    left = _timestamped_files(dataset / "image" / "stereo_left", "png")
+    right = _timestamped_files(dataset / "image" / "stereo_right", "png")
+    timestamps = sorted(set(left).intersection(right))[
+        :: config.visual_odometry.frame_step
+    ]
     if len(timestamps) < 2:
         raise FileNotFoundError("At least two timestamp-matched stereo pairs are required")
     frontend = _StereoFrontend(config)
@@ -302,5 +305,5 @@ def compute_visual_odometry(config: RunConfig) -> VisualOdometryResult:
         else:
             motions.append(motion)
         previous = current
-    _write_motions(config.output / "visual_odometry.csv", motions)
+    _write_motions(config.general.output / "visual_odometry.csv", motions)
     return VisualOdometryResult(motions, len(timestamps) - 1, rejected)

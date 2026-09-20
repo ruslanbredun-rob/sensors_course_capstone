@@ -7,16 +7,13 @@ from dataclasses import dataclass
 from math import hypot
 from pathlib import Path
 
-from .config import RunConfig
-from .dataset import read_encoders, read_imu, read_vrs_reference
-from .ekf import VehicleEKF
-from .evaluation import PositionEvaluation, evaluate_position
-from .lidar_odometry import LidarOdometryResult, compute_lidar_odometry
-from .models import Estimate, ImuSample, RelativeMotion, WheelMeasurement
-from .slip_detection import WheelSlipDetector
-from .synchronization import ordered_sensor_events
-from .visual_odometry import VisualOdometryResult, compute_visual_odometry
-from .visualization import (
+from src.camera.visual_odometry import VisualOdometryResult, compute_visual_odometry
+from src.common.config import RunConfig
+from src.common.models import Estimate, ImuSample, RelativeMotion, WheelMeasurement
+from src.common.synchronization import ordered_sensor_events
+from src.dataset.readers import read_encoders, read_vrs_reference
+from src.evaluation.metrics import PositionEvaluation, evaluate_position
+from src.evaluation.visualization import (
     DISPLAY_NAMES,
     save_comparison_plots,
     save_consistency_plot,
@@ -24,11 +21,15 @@ from .visualization import (
     save_slip_plot,
     save_validation_plot,
 )
-from .wheel_odometry import (
+from src.fusion.ekf import VehicleEKF
+from src.imu.reader import read_imu
+from src.lidar.odometry import LidarOdometryResult, compute_lidar_odometry
+from src.wheel.odometry import (
     inject_right_wheel_scale_fault,
     read_encoder_calibration,
     wheel_measurements,
 )
+from src.wheel.slip_detection import WheelSlipDetector
 
 
 @dataclass
@@ -106,19 +107,21 @@ def _require_inputs(dataset: Path, *, mode: str, validate: bool) -> None:
 
 
 def _load_wheels(config: RunConfig, *, inject_slip: bool) -> list[WheelMeasurement]:
-    calibration_path = config.dataset / "calibration" / "EncoderParameter.txt"
+    calibration_path = config.general.dataset / "calibration" / "EncoderParameter.txt"
     calibration = read_encoder_calibration(calibration_path)
-    wheels = list(wheel_measurements(read_encoders(config.dataset), calibration_path))
+    wheels = list(
+        wheel_measurements(read_encoders(config.general.dataset), calibration_path)
+    )
     if inject_slip and wheels:
-        start_ns = wheels[0].timestamp_ns + int(config.slip_fault_start_s * 1e9)
-        end_ns = start_ns + int(config.slip_fault_duration_s * 1e9)
+        start_ns = wheels[0].timestamp_ns + int(config.slip.fault_start_s * 1e9)
+        end_ns = start_ns + int(config.slip.fault_duration_s * 1e9)
         wheels = list(
             inject_right_wheel_scale_fault(
                 wheels,
                 wheel_base_m=calibration.wheel_base_m,
                 start_ns=start_ns,
                 end_ns=end_ns,
-                scale=config.slip_fault_right_scale,
+                scale=config.slip.fault_right_scale,
             )
         )
     return wheels
@@ -153,10 +156,10 @@ def _run_filter(
     use_kinematics = True
     detector = (
         WheelSlipDetector(
-            yaw_threshold_rad_s=config.slip_yaw_threshold_rad_s,
-            accel_threshold_m_s2=config.slip_accel_threshold_m_s2,
-            enter_count=config.slip_enter_count,
-            exit_count=config.slip_exit_count,
+            yaw_threshold_rad_s=config.slip.yaw_threshold_rad_s,
+            accel_threshold_m_s2=config.slip.accel_threshold_m_s2,
+            enter_count=config.slip.enter_count,
+            exit_count=config.slip.exit_count,
         )
         if name != "base"
         else None
@@ -171,8 +174,8 @@ def _run_filter(
     wheel_unhealthy_until_ns = -1
     last_visual_update_ns = -1
     event_count = 0
-    diagnostics_path = config.output / f"diagnostics_{name}.csv"
-    relative_path = config.output / f"diagnostics_relative_{name}.csv"
+    diagnostics_path = config.general.output / f"diagnostics_{name}.csv"
+    relative_path = config.general.output / f"diagnostics_relative_{name}.csv"
     with (
         diagnostics_path.open("w", newline="", encoding="utf-8") as stream,
         relative_path.open("w", newline="", encoding="utf-8") as relative_stream,
@@ -207,7 +210,7 @@ def _run_filter(
                 "used_as_correction",
             )
         )
-        streams = [read_imu(config.dataset), wheels]
+        streams = [read_imu(config.general.dataset), wheels]
         streams.extend(relative_streams or [])
         for event in ordered_sensor_events(*streams):
             if isinstance(event, ImuSample):
@@ -245,7 +248,7 @@ def _run_filter(
                     beyond_initialization and not estimator.last_wheel_accepted
                 ):
                     wheel_unhealthy_until_ns = event.timestamp_ns + int(
-                        config.relative_fallback_window_s * 1e9
+                        config.fusion.relative_fallback_window_s * 1e9
                     )
                 writer.writerow(
                     (
@@ -274,7 +277,7 @@ def _run_filter(
                     # healthy visual increment already covered this interval.
                     use_correction = use_correction and (
                         event.timestamp_ns - last_visual_update_ns
-                        > int(config.relative_fallback_window_s * 1e9)
+                        > int(config.fusion.relative_fallback_window_s * 1e9)
                     )
                 if use_correction:
                     estimator.update_relative_motion(event)
@@ -313,7 +316,7 @@ def _run_filter(
                 break
     if not states or wheel_count == 0:
         raise ValueError("Both IMU and wheel streams are required")
-    _write_estimates(config.output / f"estimated_state_{name}.csv", states)
+    _write_estimates(config.general.output / f"estimated_state_{name}.csv", states)
     return ExperimentResult(
         name,
         states,
@@ -333,8 +336,8 @@ def _evaluate(result: ExperimentResult, reference: list, config: RunConfig) -> N
     result.evaluation = evaluate_position(
         result.states,
         reference,
-        valid_fix_state=config.reference_fix_state,
-        tolerance_ns=config.reference_tolerance_ns,
+        valid_fix_state=config.evaluation.reference_fix_state,
+        tolerance_ns=config.evaluation.reference_tolerance_ns,
     )
 
 
@@ -361,7 +364,7 @@ def _write_summary(config: RunConfig, results: list[ExperimentResult]) -> str:
                 f"false-positive samples={false_rate:.2%}"
             )
     summary = "\n".join(lines) + "\n"
-    (config.output / "run_summary.txt").write_text(summary, encoding="utf-8")
+    (config.general.output / "run_summary.txt").write_text(summary, encoding="utf-8")
     return summary
 
 
@@ -388,7 +391,7 @@ def _write_validation_artifacts(
         for name, evaluation in evaluations.items()
         if evaluation is not None
     }
-    screenshot_directory = config.output / "screenshots"
+    screenshot_directory = config.general.output / "screenshots"
     screenshot_directory.mkdir(parents=True, exist_ok=True)
     save_comparison_plots(typed_evaluations, screenshot_directory)
     save_metrics_table(
@@ -398,9 +401,9 @@ def _write_validation_artifacts(
     best_name, best = min(
         typed_evaluations.items(), key=lambda item: item[1].rmse_m
     )
-    save_validation_plot(best, config.output / "trajectory_validation.png")
+    save_validation_plot(best, config.general.output / "trajectory_validation.png")
 
-    with (config.output / "comparison_metrics.csv").open(
+    with (config.general.output / "comparison_metrics.csv").open(
         "w", newline="", encoding="utf-8"
     ) as stream:
         writer = csv.writer(stream, lineterminator="\n")
@@ -426,7 +429,7 @@ def _write_validation_artifacts(
                 )
             )
 
-    with (config.output / "validation_pairs.csv").open(
+    with (config.general.output / "validation_pairs.csv").open(
         "w", newline="", encoding="utf-8"
     ) as stream:
         writer = csv.writer(stream, lineterminator="\n")
@@ -473,9 +476,9 @@ def _write_validation_artifacts(
         else float("nan")
     )
     summary_lines = [
-        f"VRS fix={config.reference_fix_state}: {best.matched_epochs}/"
+        f"VRS fix={config.evaluation.reference_fix_state}: {best.matched_epochs}/"
         f"{best.valid_fix_epochs} epochs matched within "
-        f"{config.reference_tolerance_ns / 1e6:.0f} ms",
+        f"{config.evaluation.reference_tolerance_ns / 1e6:.0f} ms",
         f"Reference trajectory length={reference_length_m:.1f} m",
         "2D ATE uses one rigid SE(2) alignment; trajectory scale is unchanged.",
     ]
@@ -490,7 +493,7 @@ def _write_validation_artifacts(
             f"improvement over E1 INS baseline="
             f"{improvement:.1f}%"
         )
-    (config.output / "validation_summary.txt").write_text(
+    (config.general.output / "validation_summary.txt").write_text(
         "\n".join(summary_lines) + "\n", encoding="utf-8"
     )
 
@@ -500,24 +503,24 @@ def _write_validation_artifacts(
         if name in typed_evaluations
     )
     save_consistency_plot(
-        config.output,
+        config.general.output,
         diagnostic_mode,
-        wheel_speed_threshold=config.wheel_nis_threshold,
-        wheel_yaw_threshold=config.wheel_yaw_nis_threshold,
-        relative_speed_threshold=config.relative_speed_nis_threshold,
-        relative_yaw_threshold=config.relative_yaw_nis_threshold,
+        wheel_speed_threshold=config.wheel.speed_nis_threshold,
+        wheel_yaw_threshold=config.wheel.yaw_nis_threshold,
+        relative_speed_threshold=config.fusion.relative_speed_nis_threshold,
+        relative_yaw_threshold=config.fusion.relative_yaw_nis_threshold,
     )
-    save_slip_plot(config.output, diagnostic_mode)
+    save_slip_plot(config.general.output, diagnostic_mode)
 
     speed_count, speed_below = _nis_fraction(
-        config.output / f"diagnostics_{diagnostic_mode}.csv",
+        config.general.output / f"diagnostics_{diagnostic_mode}.csv",
         "speed_nis",
-        config.wheel_nis_threshold,
+        config.wheel.speed_nis_threshold,
     )
     yaw_count, yaw_below = _nis_fraction(
-        config.output / f"diagnostics_{diagnostic_mode}.csv",
+        config.general.output / f"diagnostics_{diagnostic_mode}.csv",
         "yaw_rate_nis",
-        config.wheel_yaw_nis_threshold,
+        config.wheel.yaw_nis_threshold,
     )
     conclusion_lines = [
         "# Висновки ДЗ 18–19",
@@ -578,9 +581,9 @@ def _write_validation_artifacts(
             "## Консистентність і межі",
             "",
             f"Для `{diagnostic_mode}` wheel-speed NIS нижче порога "
-            f"{config.wheel_nis_threshold:.3f} у {speed_below:.2%} з "
+            f"{config.wheel.speed_nis_threshold:.3f} у {speed_below:.2%} з "
             f"{speed_count} перевірених updates; wheel-yaw NIS нижче порога "
-            f"{config.wheel_yaw_nis_threshold:.3f} у {yaw_below:.2%} з "
+            f"{config.wheel.yaw_nis_threshold:.3f} у {yaw_below:.2%} з "
             f"{yaw_count} updates. Поточна модель шуму консервативна.",
             "",
             "VRS-GPS не надходить у EKF. Він використаний після оцінювання стану "
@@ -686,7 +689,7 @@ def _write_validation_artifacts(
                 "відкидаються, а EKF продовжує predict за IMU.",
             )
         )
-    (config.output / "conclusions.md").write_text(
+    (config.general.output / "conclusions.md").write_text(
         "\n".join(conclusion_lines) + "\n", encoding="utf-8"
     )
 
@@ -699,8 +702,8 @@ def run(
     validate: bool = False,
     inject_slip: bool = False,
 ) -> None:
-    _require_inputs(config.dataset, mode=mode, validate=validate)
-    config.output.mkdir(parents=True, exist_ok=True)
+    _require_inputs(config.general.dataset, mode=mode, validate=validate)
+    config.general.output.mkdir(parents=True, exist_ok=True)
     wheels = _load_wheels(config, inject_slip=inject_slip)
     visual: VisualOdometryResult | None = None
     if mode in ("visual", "full", "all"):
@@ -739,7 +742,7 @@ def run(
         )
 
     if validate:
-        reference = list(read_vrs_reference(config.dataset))
+        reference = list(read_vrs_reference(config.general.dataset))
         for result in results:
             _evaluate(result, reference, config)
     print(_write_summary(config, results), end="")

@@ -6,12 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.config import load_config
-from src.dataset import read_imu, read_vrs_reference
-from src.ekf import VehicleEKF
-from src.evaluation import evaluate_position
-from src.lidar_odometry import rigid_fit_2d
-from src.models import (
+from src.common.config import load_config
+from src.common.models import (
     EncoderSample,
     Estimate,
     ImuSample,
@@ -19,12 +15,31 @@ from src.models import (
     RelativeMotion,
     WheelMeasurement,
 )
-from src.slip_detection import WheelSlipDetector
-from src.synchronization import ordered_events
-from src.wheel_odometry import wheel_measurements
+from src.common.synchronization import ordered_events
+from src.dataset.readers import read_vrs_reference
+from src.evaluation.metrics import evaluate_position
+from src.fusion.ekf import VehicleEKF
+from src.imu.reader import read_imu
+from src.lidar.odometry import rigid_fit_2d
+from src.wheel.odometry import wheel_measurements
+from src.wheel.slip_detection import WheelSlipDetector
 
 
 class PrototypeTests(unittest.TestCase):
+    def test_config_is_grouped_by_subsystem_and_accepts_path_overrides(self) -> None:
+        config = load_config(
+            Path("config/default.json"),
+            dataset=Path("/tmp/test-dataset"),
+            output=Path("/tmp/test-output"),
+        )
+        self.assertEqual(config.general.dataset, Path("/tmp/test-dataset"))
+        self.assertEqual(config.general.output, Path("/tmp/test-output"))
+        self.assertEqual(config.evaluation.reference_fix_state, 4)
+        self.assertGreater(config.imu.gyro_std_rad_s, 0.0)
+        self.assertGreater(config.wheel.speed_nis_threshold, 0.0)
+        self.assertGreater(config.visual_odometry.min_matches, 0)
+        self.assertGreater(config.lidar_odometry.voxel_m, 0.0)
+
     def test_slip_detector_debounces_disagreement(self) -> None:
         detector = WheelSlipDetector(
             yaw_threshold_rad_s=0.3,

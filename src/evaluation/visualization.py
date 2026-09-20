@@ -11,7 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .evaluation import PositionEvaluation
+from src.evaluation.metrics import PositionEvaluation
 
 
 DISPLAY_NAMES = {

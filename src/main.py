@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from src.config import load_config
-from src.pipeline import run
+from src.common.config import PROJECT_ROOT, load_config
+from src.fusion.pipeline import run
 
 
 def main() -> None:
@@ -14,7 +14,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path(__file__).resolve().parent / "config" / "default.json",
+        default=PROJECT_ROOT / "config" / "default.json",
     )
     parser.add_argument("--dataset", type=Path, help="Override dataset directory")
     parser.add_argument("--output", type=Path, help="Override result directory")

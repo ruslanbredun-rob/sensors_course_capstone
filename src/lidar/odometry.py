@@ -11,9 +11,9 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial import cKDTree
 
-from .calibration import read_rigid_transform
-from .config import RunConfig
-from .models import RelativeMotion, WheelMeasurement
+from src.common.config import RunConfig
+from src.common.models import RelativeMotion, WheelMeasurement
+from src.dataset.calibration import read_rigid_transform
 
 
 @dataclass(frozen=True)
@@ -103,7 +103,7 @@ class _LidarFrontend:
     def __init__(self, config: RunConfig) -> None:
         self.config = config
         self.rotation, self.translation = read_rigid_transform(
-            config.dataset / "calibration" / "Vehicle2LeftVLP.txt"
+            config.general.dataset / "calibration" / "Vehicle2LeftVLP.txt"
         )
 
     def read_scan(self, path: Path) -> np.ndarray:
@@ -121,7 +121,7 @@ class _LidarFrontend:
             & (vehicle_xyz[:, 2] < 2.5)
         )
         xy = vehicle_xyz[keep, :2]
-        cells = np.floor(xy / self.config.lidar_voxel_m).astype(np.int64)
+        cells = np.floor(xy / self.config.lidar_odometry.voxel_m).astype(np.int64)
         _, indices = np.unique(cells, axis=0, return_index=True)
         return xy[np.sort(indices)]
 
@@ -172,14 +172,14 @@ def compute_lidar_odometry(
 ) -> LidarOdometryResult:
     """Run scan-to-scan ICP and persist accepted relative motions."""
     scans = _timestamped_scans(
-        config.dataset / "sensor_data" / "VLP_left"
-    )[:: config.lidar_frame_step]
+        config.general.dataset / "sensor_data" / "VLP_left"
+    )[:: config.lidar_odometry.frame_step]
     if len(scans) < 2:
         raise FileNotFoundError("At least two left VLP-16 scans are required")
     frontend = _LidarFrontend(config)
     previous_timestamp, previous_path = scans[0]
     previous_points = frontend.read_scan(previous_path)
-    prior_speed = config.lidar_initial_speed_m_s
+    prior_speed = config.lidar_odometry.initial_speed_m_s
     prior_yaw_rate = 0.0
     wheel_hints = wheels or []
     wheel_timestamps = [sample.timestamp_ns for sample in wheel_hints]
@@ -212,7 +212,7 @@ def compute_lidar_odometry(
             current_points,
             initial_translation=initial_translation,
             initial_yaw_rad=initial_yaw,
-            max_correspondence_m=config.lidar_max_correspondence_m,
+            max_correspondence_m=config.lidar_odometry.max_correspondence_m,
         )
         accepted = result is not None
         if result is not None:
@@ -220,18 +220,18 @@ def compute_lidar_odometry(
             quality = min(
                 1.0,
                 result.inlier_ratio
-                * math.exp(-result.rmse_m / config.lidar_max_rmse_m),
+                * math.exp(-result.rmse_m / config.lidar_odometry.max_rmse_m),
             )
             accepted = (
-                result.rmse_m <= config.lidar_max_rmse_m
-                and result.inlier_ratio >= config.lidar_min_inlier_ratio
+                result.rmse_m <= config.lidar_odometry.max_rmse_m
+                and result.inlier_ratio >= config.lidar_odometry.min_inlier_ratio
                 and -5.0 <= speed <= 45.0
                 and abs(result.translation_m[1] / dt_s) <= 12.0
                 and abs(result.yaw_rad / dt_s) <= 1.5
                 and abs(result.translation_m[0] - initial_translation[0])
                 <= max(1.0, 0.5 * abs(initial_translation[0]))
                 and abs(result.yaw_rad - initial_yaw) <= 0.15
-                and quality >= config.lidar_min_quality
+                and quality >= config.lidar_odometry.min_quality
             )
         if accepted and result is not None:
             motion = RelativeMotion(
@@ -256,5 +256,5 @@ def compute_lidar_odometry(
             rejected += 1
         previous_timestamp = timestamp
         previous_points = current_points
-    _write_motions(config.output / "lidar_odometry.csv", motions)
+    _write_motions(config.general.output / "lidar_odometry.csv", motions)
     return LidarOdometryResult(motions, len(scans) - 1, rejected)

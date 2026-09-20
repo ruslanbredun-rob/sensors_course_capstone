@@ -1,37 +1,53 @@
 {
-  "dataset": "data/complex_urban/urban35",
-  "output": "results",
-  "reference_fix_state": 4,
-  "reference_tolerance_ms": 50,
-  "wheel_speed_std_m_s": 0.5,
-  "wheel_yaw_rate_std_rad_s": 0.05,
-  "gyro_std_rad_s": 0.02,
-  "accel_std_m_s2": 0.5,
-  "gyro_bias_walk_rad_s_sqrt_s": 0.0003,
-  "accel_bias_walk_m_s2_sqrt_s": 0.01,
-  "wheel_nis_threshold": 3.841,
-  "wheel_yaw_nis_threshold": 6.635,
-  "slip_yaw_threshold_rad_s": 0.35,
-  "slip_accel_threshold_m_s2": 150.0,
-  "slip_enter_count": 3,
-  "slip_exit_count": 20,
-  "slip_fault_start_s": 60.0,
-  "slip_fault_duration_s": 10.0,
-  "slip_fault_right_scale": 1.25,
-  "visual_frame_step": 2,
-  "visual_image_scale": 0.5,
-  "visual_min_matches": 45,
-  "visual_min_quality": 0.45,
-  "visual_max_speed_m_s": 40.0,
-  "lidar_frame_step": 1,
-  "lidar_voxel_m": 0.25,
-  "lidar_max_correspondence_m": 1.5,
-  "lidar_max_rmse_m": 0.8,
-  "lidar_min_inlier_ratio": 0.35,
-  "lidar_min_quality": 0.6,
-  "lidar_initial_speed_m_s": 15.0,
-  "relative_speed_nis_threshold": 6.635,
-  "relative_yaw_nis_threshold": 6.635,
-  "relative_fallback_window_s": 0.3,
-  "max_dt_s": 0.1
+  "general": {
+    "dataset": "data/complex_urban/urban35",
+    "output": "results",
+    "max_dt_s": 0.1
+  },
+  "evaluation": {
+    "reference_fix_state": 4,
+    "reference_tolerance_ms": 50
+  },
+  "imu": {
+    "gyro_std_rad_s": 0.02,
+    "accel_std_m_s2": 0.5,
+    "gyro_bias_walk_rad_s_sqrt_s": 0.0003,
+    "accel_bias_walk_m_s2_sqrt_s": 0.01
+  },
+  "wheel": {
+    "speed_std_m_s": 0.5,
+    "yaw_rate_std_rad_s": 0.05,
+    "speed_nis_threshold": 3.841,
+    "yaw_nis_threshold": 6.635
+  },
+  "slip": {
+    "yaw_threshold_rad_s": 0.35,
+    "accel_threshold_m_s2": 150.0,
+    "enter_count": 3,
+    "exit_count": 20,
+    "fault_start_s": 60.0,
+    "fault_duration_s": 10.0,
+    "fault_right_scale": 1.25
+  },
+  "visual_odometry": {
+    "frame_step": 2,
+    "image_scale": 0.5,
+    "min_matches": 45,
+    "min_quality": 0.45,
+    "max_speed_m_s": 40.0
+  },
+  "lidar_odometry": {
+    "frame_step": 1,
+    "voxel_m": 0.25,
+    "max_correspondence_m": 1.5,
+    "max_rmse_m": 0.8,
+    "min_inlier_ratio": 0.35,
+    "min_quality": 0.6,
+    "initial_speed_m_s": 15.0
+  },
+  "fusion": {
+    "relative_speed_nis_threshold": 6.635,
+    "relative_yaw_nis_threshold": 6.635,
+    "relative_fallback_window_s": 0.3
+  }
 }

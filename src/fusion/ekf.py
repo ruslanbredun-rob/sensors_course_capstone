@@ -11,8 +11,8 @@ import math
 
 import numpy as np
 
-from .config import RunConfig
-from .models import Estimate, ImuSample, RelativeMotion, WheelMeasurement
+from src.common.config import RunConfig
+from src.common.models import Estimate, ImuSample, RelativeMotion, WheelMeasurement
 
 
 class VehicleEKF:
@@ -50,7 +50,7 @@ class VehicleEKF:
             raise ValueError("EKF received an event older than its current state")
         if dt == 0:
             return
-        if dt > self.config.max_dt_s:
+        if dt > self.config.general.max_dt_s:
             raise ValueError(f"IMU gap {dt:.3f} s exceeds max_dt_s")
 
         px, py, yaw, speed, gyro_bias, accel_bias = self.x
@@ -88,10 +88,10 @@ class VehicleEKF:
         G[5, 3] = math.sqrt(dt)
         noise = np.array(
             [
-                self.config.gyro_std_rad_s**2,
-                self.config.accel_std_m_s2**2,
-                self.config.gyro_bias_walk_rad_s_sqrt_s**2,
-                self.config.accel_bias_walk_m_s2_sqrt_s**2,
+                self.config.imu.gyro_std_rad_s**2,
+                self.config.imu.accel_std_m_s2**2,
+                self.config.imu.gyro_bias_walk_rad_s_sqrt_s**2,
+                self.config.imu.accel_bias_walk_m_s2_sqrt_s**2,
             ]
         )
         self.P = F @ self.P @ F.T + (G * noise) @ G.T
@@ -148,8 +148,8 @@ class VehicleEKF:
             self.last_wheel_accepted = False
             # Preserve uncertainty while wheel information is unavailable so
             # the first healthy measurement can reacquire speed and bias.
-            self.P[3, 3] += self.config.wheel_speed_std_m_s**2
-            self.P[4, 4] += self.config.wheel_yaw_rate_std_rad_s**2
+            self.P[3, 3] += self.config.wheel.speed_std_m_s**2
+            self.P[4, 4] += self.config.wheel.yaw_rate_std_rad_s**2
             if use_yaw_rate:
                 self.last_wheel_yaw_accepted = False
             return self._estimate()
@@ -158,8 +158,8 @@ class VehicleEKF:
         self.last_wheel_nis, self.last_wheel_accepted = self._scalar_update(
             measurement.speed_m_s - self.x[3],
             speed_h,
-            self.config.wheel_speed_std_m_s**2,
-            self.config.wheel_nis_threshold,
+            self.config.wheel.speed_std_m_s**2,
+            self.config.wheel.speed_nis_threshold,
         )
         if use_yaw_rate:
             assert self._imu is not None
@@ -172,8 +172,8 @@ class VehicleEKF:
             ) = self._scalar_update(
                 measurement.yaw_rate_rad_s - predicted_yaw_rate,
                 yaw_h,
-                self.config.wheel_yaw_rate_std_rad_s**2,
-                self.config.wheel_yaw_nis_threshold,
+                self.config.wheel.yaw_rate_std_rad_s**2,
+                self.config.wheel.yaw_nis_threshold,
             )
         return self._estimate()
 
@@ -196,7 +196,7 @@ class VehicleEKF:
             speed_measurement - self.x[3],
             speed_h,
             speed_std**2,
-            self.config.relative_speed_nis_threshold,
+            self.config.fusion.relative_speed_nis_threshold,
         )
 
         assert self._imu is not None
@@ -212,6 +212,6 @@ class VehicleEKF:
             yaw_rate_measurement - predicted_yaw_rate,
             yaw_h,
             yaw_std**2,
-            self.config.relative_yaw_nis_threshold,
+            self.config.fusion.relative_yaw_nis_threshold,
         )
         return self._estimate()

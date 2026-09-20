@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .models import ImuSample, WheelMeasurement
+from src.common.models import ImuSample, WheelMeasurement
 
 
 @dataclass(frozen=True)

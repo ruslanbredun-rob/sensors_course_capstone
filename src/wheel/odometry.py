@@ -8,7 +8,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from .models import EncoderSample, WheelMeasurement
+from src.common.models import EncoderSample, WheelMeasurement
 
 
 @dataclass(frozen=True)

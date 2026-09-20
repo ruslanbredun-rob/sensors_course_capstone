@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .models import Estimate, PositionReference
+from src.common.models import Estimate, PositionReference
 
 
 @dataclass(frozen=True)
