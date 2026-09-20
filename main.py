@@ -20,7 +20,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, help="Override result directory")
     parser.add_argument(
         "--mode",
-        choices=("base", "slip", "visual", "full", "all"),
+        choices=("base", "slip", "visual", "lidar", "full", "all"),
         default="base",
     )
     parser.add_argument(

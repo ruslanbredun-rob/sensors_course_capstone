@@ -15,11 +15,11 @@ from .evaluation import PositionEvaluation
 
 
 DISPLAY_NAMES = {
-    "wheel_only": "Raw wheel odometry",
     "base": "E1 INS baseline (IMU + wheel)",
     "slip": "E2 kinematics + slip",
-    "visual": "E3 + stereo VO",
-    "full": "E4 + stereo VO + LiDAR",
+    "visual": "E2 + stereo VO",
+    "lidar": "E2 + LiDAR (no camera)",
+    "full": "E2 + stereo VO + LiDAR",
 }
 
 
@@ -65,17 +65,20 @@ def save_comparison_plots(
         reference[:, 0],
         reference[:, 1],
         color="black",
-        linewidth=2.5,
+        linewidth=2.0,
+        linestyle="--",
+        alpha=0.75,
         label="VRS-GPS RTK reference",
-        zorder=10,
+        zorder=1,
     )
     for name, evaluation in evaluations.items():
         estimate = evaluation.aligned_xy_m - origin
         axis.plot(
             estimate[:, 0],
             estimate[:, 1],
-            linewidth=1.3,
+            linewidth=1.5,
             label=f"{DISPLAY_NAMES.get(name, name)} ({evaluation.rmse_m:.2f} m)",
+            zorder=2,
         )
     axis.set_xlabel("UTM east offset (m)")
     axis.set_ylabel("UTM north offset (m)")
@@ -222,10 +225,10 @@ def save_metrics_table(
 ) -> None:
     """Render the metrics as a compact submission screenshot."""
     rows = []
-    baseline = evaluations.get("wheel_only")
+    baseline = evaluations.get("base")
     for name, result in evaluations.items():
         improvement = "-"
-        if baseline is not None and name != "wheel_only":
+        if baseline is not None and name != "base":
             improvement = f"{100.0 * (baseline.rmse_m - result.rmse_m) / baseline.rmse_m:.1f}%"
         rows.append(
             (
@@ -236,11 +239,12 @@ def save_metrics_table(
                 improvement,
             )
         )
-    figure, axis = plt.subplots(figsize=(9.5, 0.55 * len(rows) + 1.8))
+    figure, axis = plt.subplots(figsize=(11.5, 0.55 * len(rows) + 1.8))
     axis.axis("off")
     table = axis.table(
         cellText=rows,
-        colLabels=("Configuration", "RMSE (m)", "Median (m)", "P95 (m)", "vs raw wheel"),
+        colLabels=("Configuration", "RMSE (m)", "Median (m)", "P95 (m)", "vs E1"),
+        colWidths=(0.34, 0.15, 0.15, 0.15, 0.14),
         cellLoc="center",
         loc="center",
     )

@@ -21,14 +21,17 @@
   "visual_frame_step": 2,
   "visual_image_scale": 0.5,
   "visual_min_matches": 45,
+  "visual_min_quality": 0.45,
   "visual_max_speed_m_s": 40.0,
   "lidar_frame_step": 1,
   "lidar_voxel_m": 0.25,
   "lidar_max_correspondence_m": 1.5,
   "lidar_max_rmse_m": 0.8,
   "lidar_min_inlier_ratio": 0.35,
+  "lidar_min_quality": 0.6,
   "lidar_initial_speed_m_s": 15.0,
   "relative_speed_nis_threshold": 6.635,
   "relative_yaw_nis_threshold": 6.635,
+  "relative_fallback_window_s": 0.3,
   "max_dt_s": 0.1
 }

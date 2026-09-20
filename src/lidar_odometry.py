@@ -217,6 +217,11 @@ def compute_lidar_odometry(
         accepted = result is not None
         if result is not None:
             speed = float(result.translation_m[0] / dt_s)
+            quality = min(
+                1.0,
+                result.inlier_ratio
+                * math.exp(-result.rmse_m / config.lidar_max_rmse_m),
+            )
             accepted = (
                 result.rmse_m <= config.lidar_max_rmse_m
                 and result.inlier_ratio >= config.lidar_min_inlier_ratio
@@ -226,13 +231,9 @@ def compute_lidar_odometry(
                 and abs(result.translation_m[0] - initial_translation[0])
                 <= max(1.0, 0.5 * abs(initial_translation[0]))
                 and abs(result.yaw_rad - initial_yaw) <= 0.15
+                and quality >= config.lidar_min_quality
             )
         if accepted and result is not None:
-            quality = min(
-                1.0,
-                result.inlier_ratio
-                * math.exp(-result.rmse_m / config.lidar_max_rmse_m),
-            )
             motion = RelativeMotion(
                 timestamp_ns=timestamp,
                 dt_s=dt_s,

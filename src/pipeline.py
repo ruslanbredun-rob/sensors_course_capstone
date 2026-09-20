@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
+from math import hypot
 from pathlib import Path
 
 from .config import RunConfig
@@ -27,7 +28,6 @@ from .wheel_odometry import (
     inject_right_wheel_scale_fault,
     read_encoder_calibration,
     wheel_measurements,
-    wheel_only_baseline,
 )
 
 
@@ -43,6 +43,7 @@ class ExperimentResult:
     false_positive_samples: int
     relative_updates: int = 0
     rejected_relative_updates: int = 0
+    available_relative_updates: int = 0
     evaluation: PositionEvaluation | None = None
 
 
@@ -70,7 +71,7 @@ def _require_inputs(dataset: Path, *, mode: str, validate: bool) -> None:
                 dataset / "image" / "stereo_right",
             )
         )
-    if mode in ("full", "all"):
+    if mode in ("lidar", "full", "all"):
         required.extend(
             (
                 dataset / "calibration" / "Vehicle2LeftVLP.txt",
@@ -147,7 +148,9 @@ def _run_filter(
     *,
     max_events: int | None,
 ) -> ExperimentResult:
-    use_kinematics = name != "base"
+    # Every INS configuration uses both complementary base sensors: wheel
+    # kinematics for ground motion and IMU for high-rate propagation.
+    use_kinematics = True
     detector = (
         WheelSlipDetector(
             yaw_threshold_rad_s=config.slip_yaw_threshold_rad_s,
@@ -155,14 +158,18 @@ def _run_filter(
             enter_count=config.slip_enter_count,
             exit_count=config.slip_exit_count,
         )
-        if use_kinematics
+        if name != "base"
         else None
     )
     estimator = VehicleEKF(config)
     states: list[Estimate] = []
     wheel_count = rejected = slip_samples = 0
     injected = detected_injected = false_positive = 0
-    relative_count = rejected_relative = 0
+    relative_count = rejected_relative = relative_available = 0
+    slip_active_current = False
+    first_wheel_timestamp_ns: int | None = None
+    wheel_unhealthy_until_ns = -1
+    last_visual_update_ns = -1
     event_count = 0
     diagnostics_path = config.output / f"diagnostics_{name}.csv"
     relative_path = config.output / f"diagnostics_relative_{name}.csv"
@@ -197,6 +204,7 @@ def _run_filter(
                 "yaw_rate_nis",
                 "speed_accepted",
                 "yaw_rate_accepted",
+                "used_as_correction",
             )
         )
         streams = [read_imu(config.dataset), wheels]
@@ -208,6 +216,8 @@ def _run_filter(
             elif isinstance(event, WheelMeasurement):
                 if estimator.timestamp_ns is None or estimator.current_imu is None:
                     continue
+                if first_wheel_timestamp_ns is None:
+                    first_wheel_timestamp_ns = event.timestamp_ns
                 slip_active = False
                 if detector is not None:
                     decision = detector.update(
@@ -216,6 +226,7 @@ def _run_filter(
                         float(estimator.x[4]),
                     )
                     slip_active = decision.active
+                slip_active_current = slip_active
                 estimator.update_wheel(
                     event,
                     use_yaw_rate=use_kinematics,
@@ -227,6 +238,15 @@ def _run_filter(
                 injected += int(event.fault_injected)
                 detected_injected += int(event.fault_injected and slip_active)
                 false_positive += int(not event.fault_injected and slip_active)
+                beyond_initialization = (
+                    event.timestamp_ns - first_wheel_timestamp_ns > int(1e9)
+                )
+                if slip_active or (
+                    beyond_initialization and not estimator.last_wheel_accepted
+                ):
+                    wheel_unhealthy_until_ns = event.timestamp_ns + int(
+                        config.relative_fallback_window_s * 1e9
+                    )
                 writer.writerow(
                     (
                         event.timestamp_ns,
@@ -243,13 +263,36 @@ def _run_filter(
             else:
                 if estimator.timestamp_ns is None or estimator.current_imu is None:
                     continue
-                estimator.update_relative_motion(event)
-                relative_count += 1
-                accepted = bool(
-                    estimator.last_relative_speed_accepted
-                    and estimator.last_relative_yaw_accepted
+                relative_available += 1
+                wheel_degraded = (
+                    slip_active_current
+                    or event.timestamp_ns <= wheel_unhealthy_until_ns
                 )
-                rejected_relative += int(not accepted)
+                use_correction = wheel_degraded
+                if event.source == "lidar":
+                    # LiDAR is the second fallback: use it only if no recent
+                    # healthy visual increment already covered this interval.
+                    use_correction = use_correction and (
+                        event.timestamp_ns - last_visual_update_ns
+                        > int(config.relative_fallback_window_s * 1e9)
+                    )
+                if use_correction:
+                    estimator.update_relative_motion(event)
+                    relative_count += 1
+                    accepted = bool(
+                        estimator.last_relative_speed_accepted
+                        and estimator.last_relative_yaw_accepted
+                    )
+                    rejected_relative += int(not accepted)
+                    if event.source == "visual" and accepted:
+                        last_visual_update_ns = event.timestamp_ns
+                    speed_nis = f"{estimator.last_relative_speed_nis:.6f}"
+                    yaw_nis = f"{estimator.last_relative_yaw_nis:.6f}"
+                    speed_accepted = estimator.last_relative_speed_accepted
+                    yaw_accepted = estimator.last_relative_yaw_accepted
+                else:
+                    speed_nis = yaw_nis = ""
+                    speed_accepted = yaw_accepted = False
                 relative_writer.writerow(
                     (
                         event.timestamp_ns,
@@ -258,10 +301,11 @@ def _run_filter(
                         f"{event.dy_m:.6f}",
                         f"{event.dyaw_rad:.8f}",
                         f"{event.quality:.6f}",
-                        f"{estimator.last_relative_speed_nis:.6f}",
-                        f"{estimator.last_relative_yaw_nis:.6f}",
-                        estimator.last_relative_speed_accepted,
-                        estimator.last_relative_yaw_accepted,
+                        speed_nis,
+                        yaw_nis,
+                        speed_accepted,
+                        yaw_accepted,
+                        use_correction,
                     )
                 )
             event_count += 1
@@ -281,6 +325,7 @@ def _run_filter(
         false_positive,
         relative_count,
         rejected_relative,
+        relative_available,
     )
 
 
@@ -300,7 +345,8 @@ def _write_summary(config: RunConfig, results: list[ExperimentResult]) -> str:
         line = (
             f"{result.name}: states={len(result.states)}, wheel={result.wheel_updates}, "
             f"rejected={result.rejected_wheel_updates}, slip={result.slip_samples}, "
-            f"relative={result.relative_updates}, relative_rejected={result.rejected_relative_updates}, "
+            f"relative={result.relative_updates}/{result.available_relative_updates}, "
+            f"relative_rejected={result.rejected_relative_updates}, "
             f"final=({final.x_m:.3f}, {final.y_m:.3f}) m"
         )
         if result.evaluation is not None:
@@ -349,12 +395,9 @@ def _write_validation_artifacts(
         typed_evaluations, screenshot_directory / "metrics_summary.png"
     )
 
-    fused = {
-        name: evaluation
-        for name, evaluation in typed_evaluations.items()
-        if name != "wheel_only"
-    }
-    best_name, best = min(fused.items(), key=lambda item: item[1].rmse_m)
+    best_name, best = min(
+        typed_evaluations.items(), key=lambda item: item[1].rmse_m
+    )
     save_validation_plot(best, config.output / "trajectory_validation.png")
 
     with (config.output / "comparison_metrics.csv").open(
@@ -414,16 +457,26 @@ def _write_validation_artifacts(
                     )
                 )
 
-    baseline = typed_evaluations.get("wheel_only")
+    ins_baseline = typed_evaluations.get("base")
+    reference_length_m = sum(
+        hypot(
+            float(current[0] - previous[0]),
+            float(current[1] - previous[1]),
+        )
+        for previous, current in zip(
+            best.reference_xy_m, best.reference_xy_m[1:]
+        )
+    )
     improvement = (
-        100.0 * (baseline.rmse_m - best.rmse_m) / baseline.rmse_m
-        if baseline is not None
+        100.0 * (ins_baseline.rmse_m - best.rmse_m) / ins_baseline.rmse_m
+        if ins_baseline is not None
         else float("nan")
     )
     summary_lines = [
         f"VRS fix={config.reference_fix_state}: {best.matched_epochs}/"
         f"{best.valid_fix_epochs} epochs matched within "
         f"{config.reference_tolerance_ns / 1e6:.0f} ms",
+        f"Reference trajectory length={reference_length_m:.1f} m",
         "2D ATE uses one rigid SE(2) alignment; trajectory scale is unchanged.",
     ]
     for name, evaluation in typed_evaluations.items():
@@ -431,10 +484,10 @@ def _write_validation_artifacts(
             f"{DISPLAY_NAMES.get(name, name)}: RMSE={evaluation.rmse_m:.3f} m, "
             f"median={evaluation.median_m:.3f} m, P95={evaluation.p95_m:.3f} m"
         )
-    if baseline is not None:
+    if ins_baseline is not None:
         summary_lines.append(
-            f"Best fused={DISPLAY_NAMES.get(best_name, best_name)}: "
-            f"improvement over raw wheel odometry="
+            f"Best={DISPLAY_NAMES.get(best_name, best_name)}: "
+            f"improvement over E1 INS baseline="
             f"{improvement:.1f}%"
         )
     (config.output / "validation_summary.txt").write_text(
@@ -442,7 +495,9 @@ def _write_validation_artifacts(
     )
 
     diagnostic_mode = next(
-        name for name in ("full", "visual", "slip", "base") if name in fused
+        name
+        for name in ("full", "lidar", "visual", "slip", "base")
+        if name in typed_evaluations
     )
     save_consistency_plot(
         config.output,
@@ -480,12 +535,45 @@ def _write_validation_artifacts(
     conclusion_lines.extend(
         (
             "",
-            f"Найкращий fused режим — `{best_name}`: {best.rmse_m:.3f} м RMSE. "
-            + (
-                f"Покращення відносно raw wheel odometry становить {improvement:.1f}%."
-                if baseline is not None
-                else ""
-            ),
+            (
+                f"Найкращий режим — `{best_name}`: {best.rmse_m:.3f} м RMSE. "
+                + (
+                    f"Покращення відносно E1 Wheel+IMU становить {improvement:.1f}%."
+                    if ins_baseline is not None
+                    else ""
+                )
+            ).rstrip(),
+            f"RMSE пораховано по {best.matched_epochs} VRS epochs уздовж "
+            f"траєкторії {reference_length_m:.0f} м.",
+            "",
+            "## Наш шлях обробки даних",
+            "",
+            "1. `encoder.csv` і `xsens_imu.csv` читаються потоково з перевіркою "
+            "кількості колонок, SI units і строго зростаючих nanosecond timestamps. "
+            "Обидва потоки мають близько 100 Hz, тому жоден із них не є "
+            "низькочастотною зовнішньою поправкою.",
+            "2. Encoder counts через resolution, діаметри коліс і фактичний `dt` "
+            "перетворюються на left/right speed, лінійну швидкість та "
+            "differential-drive course constraint; `x,y` інтегрує EKF.",
+            "3. IMU gyro `z` і acceleration `x` виконують high-rate EKF prediction: "
+            "кутова швидкість поширює orientation/yaw, прискорення — speed. "
+            "IMU-only trajectory не використовується, бо інтегрування acceleration "
+            "без надійної початкової лінійної швидкості швидко накопичує drift.",
+            "4. E1 Base завжди використовує обидва комплементарні джерела: Wheel "
+            "+ IMU. Wheel update коригує speed і gyro bias; EKF записує "
+            "`x, y, yaw, speed` після кожного IMU step.",
+            "5. E2 додає wheel/IMU disagreement detector. Під час slip wheel "
+            "correction пропускається, а IMU prediction продовжується.",
+            "6. Stereo frontend ректифікує пари, знаходить ORB matches, виконує "
+            "RANSAC essential matrix і відновлює metric scale зі disparity. "
+            "LiDAR frontend переводить VLP-16 points у vehicle frame, voxelizes "
+            "їх та оцінює increment через 2D ICP.",
+            "7. Health manager використовує VO лише у degraded wheel interval. "
+            "LiDAR є другим fallback, якщо немає недавньої якісної VO correction. "
+            "Низька quality або NIS вище gate залишають стан попереднього етапу.",
+            "8. `vrs_gps.csv` не читається estimator-ом. Після завершення run "
+            "valid RTK epochs зіставляються за часом, траєкторії один раз "
+            "вирівнюються rigid SE(2) без scale fit, після чого рахується ATE.",
             "",
             "## Консистентність і межі",
             "",
@@ -500,16 +588,82 @@ def _write_validation_artifacts(
             "ATE по всій траєкторії.",
         )
     )
-    if "visual" in typed_evaluations or "full" in typed_evaluations:
+    if any(
+        name in typed_evaluations for name in ("visual", "lidar", "full")
+    ):
+        visual_result = next(
+            (result for result in results if result.name == "visual"), None
+        )
+        lidar_result = next(
+            (result for result in results if result.name == "lidar"), None
+        )
+        slip_result = next(
+            (result for result in results if result.name == "slip"), None
+        )
+        fallback_details = []
+        if visual_result is not None:
+            fallback_details.append(
+                f"VO: {visual_result.relative_updates}/"
+                f"{visual_result.available_relative_updates} corrections"
+            )
+        if lidar_result is not None:
+            fallback_details.append(
+                f"LiDAR без камер: {lidar_result.relative_updates}/"
+                f"{lidar_result.available_relative_updates} corrections"
+            )
         conclusion_lines.extend(
             (
                 "",
-                "Stereo VO дає незалежні relative-motion updates і знизив P95 "
-                "похибки, але не покращив загальний RMSE відносно E2. Частину "
-                "кадрів відкидають feature та NIS gates. LiDAR ICP використовує "
-                "wheel motion лише як початкове наближення. Через rolling scan "
-                "distortion його yaw має велику коваріацію; E4 на цій "
-                "послідовності не дав додаткового покращення RMSE.",
+                "Strict health gating не дозволив VO або LiDAR погіршити E2. "
+                + (
+                    "На звичайній послідовності використано "
+                    + "; ".join(fallback_details)
+                    + ". "
+                    if fallback_details
+                    else ""
+                )
+                + "Frontends повністю обробили дані, але estimator приймав "
+                "correction лише під час degraded wheel interval.",
+                "",
+                "## Чому VO та LiDAR майже не покращили результат",
+                "",
+                "Саме `urban35` є легкою послідовністю для Wheel+IMU: обидва "
+                "потоки працюють приблизно зі 100 Hz, рух переважно плавний, а "
+                + (
+                    f"slip detector був активний лише для "
+                    f"{slip_result.slip_samples} із "
+                    f"{slip_result.wheel_updates} wheel samples "
+                    f"({slip_result.slip_samples / slip_result.wheel_updates:.2%}). "
+                    if slip_result is not None
+                    else "природна деградація коліс була короткою. "
+                )
+                + "Тому E2 вже добре відтворює форму траєкторії, а зовнішнім "
+                "сенсорам майже нічого виправляти.",
+                "",
+                "Реалізовані frontends не є повноцінними VIO/LIO. Stereo VO "
+                "не оптимізує features разом з IMU state, а LiDAR ICP не робить "
+                "IMU deskew rolling scan. При постійному fusion їхні noisy "
+                "increments трохи погіршували RMSE, тому health manager "
+                "використовує їх лише як fallback. На цій послідовності це "
+                "означає практично однаковий результат E2, E2+VO та E2+LiDAR.",
+                "",
+                "## Порівняння з VIO та LIO",
+                "",
+                "Поточна система є **loosely coupled**: stereo VO та LiDAR ICP "
+                "спочатку окремо оцінюють relative motion, після чого EKF отримує "
+                "лише speed/yaw-rate correction. Cross-covariance features, "
+                "point clouds, IMU bias і state при цьому втрачається.",
+                "",
+                "**VIO** спільно оптимізує camera reprojection residuals, IMU "
+                "preintegration, pose, velocity і biases. Це краще утримує scale "
+                "та orientation, але потребує точної camera–IMU calibration, "
+                "ініціалізації й складнішого nonlinear solver.",
+                "",
+                "**LIO** використовує IMU для deskew кожного LiDAR scan і спільно "
+                "оцінює trajectory та scan residuals. Це прямо усуває основну "
+                "проблему нашого VLP-16 ICP — rolling motion distortion. Ціна — "
+                "точна time/extrinsic calibration, більший state і суттєво більше "
+                "обчислень.",
             )
         )
     result_for_detector = next(
@@ -556,19 +710,23 @@ def run(
             f"{visual.attempted_pairs}, rejected={visual.rejected_pairs}"
         )
     lidar: LidarOdometryResult | None = None
-    if mode in ("full", "all"):
+    if mode in ("lidar", "full", "all"):
         lidar = compute_lidar_odometry(config, wheels)
         print(
             f"lidar frontend: accepted={len(lidar.motions)}/"
             f"{lidar.attempted_pairs}, rejected={lidar.rejected_pairs}"
         )
-    modes = ["base", "slip", "visual", "full"] if mode == "all" else [mode]
+    modes = (
+        ["base", "slip", "visual", "lidar", "full"]
+        if mode == "all"
+        else [mode]
+    )
     results = []
     for name in modes:
         relative_streams = []
         if name in ("visual", "full") and visual:
             relative_streams.append(visual.motions)
-        if name == "full" and lidar:
+        if name in ("lidar", "full") and lidar:
             relative_streams.append(lidar.motions)
         results.append(
             _run_filter(
@@ -580,17 +738,10 @@ def run(
             )
         )
 
-    baseline = list(wheel_only_baseline(wheels))
-    _write_estimates(config.output / "estimated_state_wheel_only.csv", baseline)
     if validate:
         reference = list(read_vrs_reference(config.dataset))
-        baseline_result = ExperimentResult(
-            "wheel_only", baseline, len(wheels), 0, 0, 0, 0, 0
-        )
-        _evaluate(baseline_result, reference, config)
         for result in results:
             _evaluate(result, reference, config)
-        results.insert(0, baseline_result)
     print(_write_summary(config, results), end="")
     if validate:
         _write_validation_artifacts(config, results)

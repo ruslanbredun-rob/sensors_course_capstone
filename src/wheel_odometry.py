@@ -1,4 +1,4 @@
-"""Encoder calibration, measurements and independent raw baseline."""
+"""Encoder calibration, wheel measurements and fault injection."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from .models import EncoderSample, Estimate, WheelMeasurement
+from .models import EncoderSample, WheelMeasurement
 
 
 @dataclass(frozen=True)
@@ -72,29 +72,6 @@ def wheel_measurements(
                 right_speed,
             )
         previous = sample
-
-
-def wheel_only_baseline(measurements: Iterable[WheelMeasurement]) -> Iterator[Estimate]:
-    """Integrate differential-wheel motion without IMU."""
-    previous_ns: int | None = None
-    x_m = y_m = yaw_rad = 0.0
-    for measurement in measurements:
-        if previous_ns is None:
-            previous_ns = measurement.timestamp_ns
-            yield Estimate(previous_ns, x_m, y_m, yaw_rad, measurement.speed_m_s)
-            continue
-        dt = (measurement.timestamp_ns - previous_ns) * 1e-9
-        if dt <= 0:
-            raise ValueError("Wheel timestamps must be strictly increasing")
-        yaw_mid = yaw_rad + 0.5 * measurement.yaw_rate_rad_s * dt
-        x_m += measurement.speed_m_s * math.cos(yaw_mid) * dt
-        y_m += measurement.speed_m_s * math.sin(yaw_mid) * dt
-        yaw_rad = math.atan2(
-            math.sin(yaw_rad + measurement.yaw_rate_rad_s * dt),
-            math.cos(yaw_rad + measurement.yaw_rate_rad_s * dt),
-        )
-        previous_ns = measurement.timestamp_ns
-        yield Estimate(previous_ns, x_m, y_m, yaw_rad, measurement.speed_m_s)
 
 
 def inject_right_wheel_scale_fault(

@@ -224,6 +224,8 @@ class _StereoFrontend:
         ):
             return None
         quality = min(1.0, inliers / max(len(good), 1))
+        if quality < config.visual_min_quality:
+            return None
         return RelativeMotion(
             timestamp_ns=current.timestamp_ns,
             dt_s=dt_s,

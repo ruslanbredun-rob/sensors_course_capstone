@@ -21,20 +21,10 @@ from src.models import (
 )
 from src.slip_detection import WheelSlipDetector
 from src.synchronization import ordered_events
-from src.wheel_odometry import wheel_measurements, wheel_only_baseline
+from src.wheel_odometry import wheel_measurements
 
 
 class PrototypeTests(unittest.TestCase):
-    def test_wheel_only_integrates_differential_yaw(self) -> None:
-        measurements = [
-            WheelMeasurement(0, 1.0, 0.0),
-            WheelMeasurement(1_000_000_000, 1.0, 0.5),
-            WheelMeasurement(2_000_000_000, 1.0, 0.5),
-        ]
-        states = list(wheel_only_baseline(measurements))
-        self.assertAlmostEqual(states[-1].yaw_rad, 1.0)
-        self.assertGreater(states[-1].y_m, 0.0)
-
     def test_slip_detector_debounces_disagreement(self) -> None:
         detector = WheelSlipDetector(
             yaw_threshold_rad_s=0.3,
