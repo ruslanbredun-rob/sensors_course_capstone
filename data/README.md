@@ -27,9 +27,6 @@ data/complex_urban/urban35/
 └── sick_pointcloud.las
 ```
 
-The current local copy also contains `archives/` with the original downloaded
-archives. They are retained for recovery but are not required at runtime.
-
 Known sequence details:
 
 - sensor streams have different rates and must be matched by timestamp;
