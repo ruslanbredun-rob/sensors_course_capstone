@@ -15,6 +15,14 @@ from .models import Estimate, ImuSample, RelativeMotion, WheelMeasurement
 from .slip_detection import WheelSlipDetector
 from .synchronization import ordered_sensor_events
 from .visual_odometry import VisualOdometryResult, compute_visual_odometry
+from .visualization import (
+    DISPLAY_NAMES,
+    save_comparison_plots,
+    save_consistency_plot,
+    save_metrics_table,
+    save_slip_plot,
+    save_validation_plot,
+)
 from .wheel_odometry import (
     inject_right_wheel_scale_fault,
     read_encoder_calibration,
@@ -311,6 +319,224 @@ def _write_summary(config: RunConfig, results: list[ExperimentResult]) -> str:
     return summary
 
 
+def _nis_fraction(path: Path, column: str, threshold: float) -> tuple[int, float]:
+    rows = csv.DictReader(path.open(encoding="utf-8"))
+    values = [float(row[column]) for row in rows if row.get(column)]
+    if not values:
+        return 0, float("nan")
+    return len(values), sum(value <= threshold for value in values) / len(values)
+
+
+def _write_validation_artifacts(
+    config: RunConfig, results: list[ExperimentResult]
+) -> None:
+    evaluations = {
+        result.name: result.evaluation
+        for result in results
+        if result.evaluation is not None
+    }
+    if not evaluations:
+        return
+    typed_evaluations: dict[str, PositionEvaluation] = {
+        name: evaluation
+        for name, evaluation in evaluations.items()
+        if evaluation is not None
+    }
+    screenshot_directory = config.output / "screenshots"
+    screenshot_directory.mkdir(parents=True, exist_ok=True)
+    save_comparison_plots(typed_evaluations, screenshot_directory)
+    save_metrics_table(
+        typed_evaluations, screenshot_directory / "metrics_summary.png"
+    )
+
+    fused = {
+        name: evaluation
+        for name, evaluation in typed_evaluations.items()
+        if name != "wheel_only"
+    }
+    best_name, best = min(fused.items(), key=lambda item: item[1].rmse_m)
+    save_validation_plot(best, config.output / "trajectory_validation.png")
+
+    with (config.output / "comparison_metrics.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as stream:
+        writer = csv.writer(stream, lineterminator="\n")
+        writer.writerow(
+            (
+                "configuration",
+                "matched_vrs_epochs",
+                "rmse_m",
+                "median_m",
+                "p95_m",
+                "final_error_m",
+            )
+        )
+        for name, evaluation in typed_evaluations.items():
+            writer.writerow(
+                (
+                    name,
+                    evaluation.matched_epochs,
+                    f"{evaluation.rmse_m:.6f}",
+                    f"{evaluation.median_m:.6f}",
+                    f"{evaluation.p95_m:.6f}",
+                    f"{evaluation.final_error_m:.6f}",
+                )
+            )
+
+    with (config.output / "validation_pairs.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as stream:
+        writer = csv.writer(stream, lineterminator="\n")
+        writer.writerow(
+            (
+                "configuration",
+                "timestamp_ns",
+                "estimate_time_offset_ms",
+                "vrs_utm_easting_m",
+                "vrs_utm_northing_m",
+                "aligned_est_easting_m",
+                "aligned_est_northing_m",
+                "error_m",
+            )
+        )
+        for name, evaluation in typed_evaluations.items():
+            for index, timestamp in enumerate(evaluation.timestamp_ns):
+                writer.writerow(
+                    (
+                        name,
+                        timestamp,
+                        f"{evaluation.time_offset_ms[index]:.3f}",
+                        f"{evaluation.reference_xy_m[index, 0]:.4f}",
+                        f"{evaluation.reference_xy_m[index, 1]:.4f}",
+                        f"{evaluation.aligned_xy_m[index, 0]:.4f}",
+                        f"{evaluation.aligned_xy_m[index, 1]:.4f}",
+                        f"{evaluation.error_m[index]:.4f}",
+                    )
+                )
+
+    baseline = typed_evaluations.get("wheel_only")
+    improvement = (
+        100.0 * (baseline.rmse_m - best.rmse_m) / baseline.rmse_m
+        if baseline is not None
+        else float("nan")
+    )
+    summary_lines = [
+        f"VRS fix={config.reference_fix_state}: {best.matched_epochs}/"
+        f"{best.valid_fix_epochs} epochs matched within "
+        f"{config.reference_tolerance_ns / 1e6:.0f} ms",
+        "2D ATE uses one rigid SE(2) alignment; trajectory scale is unchanged.",
+    ]
+    for name, evaluation in typed_evaluations.items():
+        summary_lines.append(
+            f"{DISPLAY_NAMES.get(name, name)}: RMSE={evaluation.rmse_m:.3f} m, "
+            f"median={evaluation.median_m:.3f} m, P95={evaluation.p95_m:.3f} m"
+        )
+    if baseline is not None:
+        summary_lines.append(
+            f"Best fused={DISPLAY_NAMES.get(best_name, best_name)}: "
+            f"improvement over raw wheel odometry="
+            f"{improvement:.1f}%"
+        )
+    (config.output / "validation_summary.txt").write_text(
+        "\n".join(summary_lines) + "\n", encoding="utf-8"
+    )
+
+    diagnostic_mode = next(
+        name for name in ("full", "visual", "slip", "base") if name in fused
+    )
+    save_consistency_plot(
+        config.output,
+        diagnostic_mode,
+        wheel_speed_threshold=config.wheel_nis_threshold,
+        wheel_yaw_threshold=config.wheel_yaw_nis_threshold,
+        relative_speed_threshold=config.relative_speed_nis_threshold,
+        relative_yaw_threshold=config.relative_yaw_nis_threshold,
+    )
+    save_slip_plot(config.output, diagnostic_mode)
+
+    speed_count, speed_below = _nis_fraction(
+        config.output / f"diagnostics_{diagnostic_mode}.csv",
+        "speed_nis",
+        config.wheel_nis_threshold,
+    )
+    yaw_count, yaw_below = _nis_fraction(
+        config.output / f"diagnostics_{diagnostic_mode}.csv",
+        "yaw_rate_nis",
+        config.wheel_yaw_nis_threshold,
+    )
+    conclusion_lines = [
+        "# Висновки ДЗ 18–19",
+        "",
+        "## Результати на `urban35`",
+        "",
+        "| Конфігурація | RMSE, м | Median, м | P95, м |",
+        "|---|---:|---:|---:|",
+    ]
+    for name, evaluation in typed_evaluations.items():
+        conclusion_lines.append(
+            f"| {DISPLAY_NAMES.get(name, name)} | {evaluation.rmse_m:.3f} | "
+            f"{evaluation.median_m:.3f} | {evaluation.p95_m:.3f} |"
+        )
+    conclusion_lines.extend(
+        (
+            "",
+            f"Найкращий fused режим — `{best_name}`: {best.rmse_m:.3f} м RMSE. "
+            + (
+                f"Покращення відносно raw wheel odometry становить {improvement:.1f}%."
+                if baseline is not None
+                else ""
+            ),
+            "",
+            "## Консистентність і межі",
+            "",
+            f"Для `{diagnostic_mode}` wheel-speed NIS нижче порога "
+            f"{config.wheel_nis_threshold:.3f} у {speed_below:.2%} з "
+            f"{speed_count} перевірених updates; wheel-yaw NIS нижче порога "
+            f"{config.wheel_yaw_nis_threshold:.3f} у {yaw_below:.2%} з "
+            f"{yaw_count} updates. Поточна модель шуму консервативна.",
+            "",
+            "VRS-GPS не надходить у EKF. Він використаний після оцінювання стану "
+            "для часових пар, одного SE(2) вирівнювання без зміни масштабу та "
+            "ATE по всій траєкторії.",
+        )
+    )
+    if "visual" in typed_evaluations or "full" in typed_evaluations:
+        conclusion_lines.extend(
+            (
+                "",
+                "Stereo VO дає незалежні relative-motion updates і знизив P95 "
+                "похибки, але не покращив загальний RMSE відносно E2. Частину "
+                "кадрів відкидають feature та NIS gates. LiDAR ICP використовує "
+                "wheel motion лише як початкове наближення. Через rolling scan "
+                "distortion його yaw має велику коваріацію; E4 на цій "
+                "послідовності не дав додаткового покращення RMSE.",
+            )
+        )
+    result_for_detector = next(
+        (result for result in results if result.injected_samples), None
+    )
+    if result_for_detector is not None:
+        detection = (
+            result_for_detector.detected_injected_samples
+            / result_for_detector.injected_samples
+        )
+        healthy = result_for_detector.wheel_updates - result_for_detector.injected_samples
+        false_rate = result_for_detector.false_positive_samples / max(healthy, 1)
+        conclusion_lines.extend(
+            (
+                "",
+                "## Контрольована перевірка slip detector",
+                "",
+                f"Detection rate: {detection:.1%}; false-positive samples: "
+                f"{false_rate:.2%}. Під час fault interval wheel updates "
+                "відкидаються, а EKF продовжує predict за IMU.",
+            )
+        )
+    (config.output / "conclusions.md").write_text(
+        "\n".join(conclusion_lines) + "\n", encoding="utf-8"
+    )
+
+
 def run(
     config: RunConfig,
     mode: str,
@@ -366,3 +592,5 @@ def run(
             _evaluate(result, reference, config)
         results.insert(0, baseline_result)
     print(_write_summary(config, results), end="")
+    if validate:
+        _write_validation_artifacts(config, results)

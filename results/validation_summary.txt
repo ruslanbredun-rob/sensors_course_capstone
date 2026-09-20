@@ -1,4 +1,8 @@
 VRS fix=4: 169/169 epochs matched within 50 ms
-2D ATE RMSE after SE(2) alignment (no scale): 38.441 m
-Median=33.227 m, P95=72.350 m, final=86.024 m
-Validation files: validation_pairs.csv, trajectory_validation.png
+2D ATE uses one rigid SE(2) alignment; trajectory scale is unchanged.
+Raw wheel odometry: RMSE=4.625 m, median=4.259 m, P95=7.116 m
+E1 INS baseline (IMU + wheel): RMSE=38.441 m, median=33.227 m, P95=72.350 m
+E2 kinematics + slip: RMSE=3.788 m, median=3.259 m, P95=5.958 m
+E3 + stereo VO: RMSE=3.842 m, median=3.302 m, P95=5.774 m
+E4 + stereo VO + LiDAR: RMSE=3.844 m, median=3.304 m, P95=5.780 m
+Best fused=E2 kinematics + slip: improvement over wheel_only=18.1%
