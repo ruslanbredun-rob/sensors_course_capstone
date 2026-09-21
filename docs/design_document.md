@@ -58,10 +58,10 @@ Complex Urban Dataset / urban35
       |
 timestamp sync + loaders
       |
-      +--> encoders --> wheel odometry --> regime/NIS adaptation --+
+      +--> encoders --> wheel odometry --> NIS gate ----------------+
       +--> Xsens IMU --> prediction -------------------------------+--> 2D EKF
       +--> stereo images --> visual odometry --> quality/NIS -------+      |
-      +--> VLP scans --> deskew + local-map odometry --> quality/NIS+      +--> x,y,yaw,v
+      +--> VLP scans --> scan-to-scan odometry --> quality/NIS -----+      +--> x,y,yaw,v
 
 VRS-GPS (valid RTK fix) + FOG --> evaluation only
 ```

@@ -6,17 +6,15 @@ fusion і використовується лише для незалежної 
 
 ## Реалізовані конфігурації
 
-- **Adaptive INS baseline:** Xsens IMU prediction + wheel speed і differential
+- **INS baseline:** Xsens IMU prediction + wheel speed і differential
   wheel yaw rate;
 - **Baseline + stereo VO:** metric body-frame `dx, dy, dyaw` від stereo camera;
-- **Baseline + LiDAR:** IMU-deskewed hybrid scan-to-scan/scan-to-local-map
-  odometry з left VLP-16;
+- **Baseline + LiDAR:** scan-to-scan planar ICP з left VLP-16;
 - **Full:** LiDAR corrections і stereo VO у прогалинах LiDAR.
 
-EKF state: `[x, y, yaw, speed, gyro_z_bias, accel_x_bias]`. Колісні noise та
-gyro-bias random walk адаптуються окремо для прямого руху і поворотів. VO/LO
-передають body-frame relative pose. EKF порівнює її зі збереженою pose clone і
-адаптивно збільшує measurement covariance за NIS.
+EKF state: `[x, y, yaw, speed, gyro_z_bias, accel_x_bias]`. VO/LO передають
+body-frame relative pose. EKF порівнює її зі збереженою pose clone та збільшує
+measurement covariance за NIS для слабких relative updates.
 
 ## Дані
 
@@ -77,16 +75,18 @@ metric окремо фіксує старт і початковий напрям
 без глобальної компенсації yaw. RTK metrics також розбиваються на безперервні
 segments, якщо між valid fixes є прогалина понад 1.5 с.
 
-| Sequence | Adaptive baseline | +VO | +LiDAR | Full |
+| Sequence | IMU + wheel | +VO | +LiDAR | Full |
 |---|---:|---:|---:|---:|
-| `urban35`, RMSE м | 3.978 | 3.978 | **3.259** | **3.259** |
-| `urban33`, RMSE м | 68.508 | 72.190 | **67.932** | 68.298 |
-| `urban39`, RMSE м | 180.640 | 190.904 | **176.724** | 176.730 |
+| `urban35`, global RMSE | **4.153 м** | **4.153 м** | 127.396 м | 127.396 м |
+| `urban33`, global RMSE | 83.828 м | 87.403 м | 61.992 м | **61.961 м** |
+| `urban39`, global RMSE | 188.456 м | 197.715 м | 91.581 м | **91.522 м** |
 
 `urban35` є коротким майже прямим маршрутом, де baseline вже добре відтворює
-форму. На довгих sequences прості VO/LO frontends не усувають систематичний yaw
-drift: local-map correction допомагає мало, а stereo VO може погіршувати оцінку
-через scale/bias. Деталі, RTK coverage і обмеження наведені у
+форму. Global alignment може приховувати accumulated yaw error, тому його треба
+читати разом з initial-pose plots. Прості VO/LO frontends не дають стабільного
+покращення на всіх sequences: stereo VO має scale/bias, а scan-to-scan LiDAR
+накопичує drift. Цей результат обґрунтовує перехід до VIO/LIO/LVIO або loop
+closure. Повні метрики, RTK coverage і обмеження наведені у
 [results/conclusions.md](results/conclusions.md). Архітектура описана в
 [docs/architecture.md](docs/architecture.md).
 
