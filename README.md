@@ -1,14 +1,17 @@
 # GPS-denied vehicle localization
 
-Курсовий проєкт для ДЗ 18–19 на Complex Urban Dataset. У гілці `feature/vio`
-реалізовано три незалежні експерименти:
+Курсовий проєкт для ДЗ 18–19 на Complex Urban Dataset. Реалізовано шість
+незалежних експериментів:
 
 - `base`: planar INS на IMU та колісній кінематиці;
 - `visual`: baseline з relative stereo VO corrections;
 - `vio`: IMU + колеса + feature-level stereo VIO.
+- `gps`: IMU + колеса + всі commercial GPS measurements;
+- `gps_dropout`: GPS відсутній на 20–40% та 50–70% пройденого шляху;
+- `gps_sparse`: використовується кожне десяте GPS measurement.
 
-VRS-GPS не входить в estimator і використовується лише для оцінки готової
-траєкторії.
+Commercial `gps.csv` входить лише у три GPS режими. VRS-GPS ніколи не входить
+в estimator і використовується лише для оцінки готової траєкторії.
 
 ## Середовище
 
@@ -33,7 +36,7 @@ python -m src.main --mode vio --validate \
   --output results/urban33
 ```
 
-Порівняння baseline, VO та VIO:
+Порівняння всіх шести режимів:
 
 ```bash
 for sequence in urban35 urban33 urban39; do

@@ -22,6 +22,14 @@
     "speed_nis_threshold": 3.841,
     "yaw_nis_threshold": 6.635
   },
+  "gps": {
+    "initial_alignment_distance_m": 50.0,
+    "min_position_std_m": 2.0,
+    "position_nis_threshold": 9.21,
+    "max_covariance_scale": 100.0,
+    "sparse_factor": 10,
+    "dropout_ranges": [[0.2, 0.4], [0.5, 0.7]]
+  },
   "visual_odometry": {
     "frame_step": 2,
     "image_scale": 0.5,

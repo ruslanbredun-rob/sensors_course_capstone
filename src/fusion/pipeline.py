@@ -6,6 +6,8 @@ import csv
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 from src.camera.visual_odometry import (
     VisualOdometryResult,
     compute_visual_odometry,
@@ -19,16 +21,20 @@ from src.camera.vio import (
 from src.common.config import RunConfig
 from src.common.models import (
     Estimate,
+    GpsMeasurement,
     ImuSample,
     RelativeMotion,
     RelativePoseEpoch,
     WheelMeasurement,
 )
 from src.common.synchronization import ordered_sensor_events
+from src.dataset.calibration import read_rigid_transform
 from src.dataset.readers import read_encoders, read_vrs_reference
 from src.evaluation.artifacts import export_validation_artifacts
 from src.evaluation.metrics import PositionEvaluation, evaluate_position
 from src.fusion.ekf import VehicleEKF
+from src.gps.reader import read_gps
+from src.gps.scenarios import gps_scenarios
 from src.imu.reader import read_imu
 from src.wheel.odometry import (
     wheel_measurements,
@@ -44,6 +50,9 @@ class ExperimentResult:
     relative_updates: int = 0
     rejected_relative_updates: int = 0
     available_relative_updates: int = 0
+    gps_updates: int = 0
+    rejected_gps_updates: int = 0
+    available_gps_updates: int = 0
     evaluation: PositionEvaluation | None = None
 
 
@@ -52,7 +61,15 @@ def _require_inputs(dataset: Path, *, mode: str, validate: bool) -> None:
         dataset / "sensor_data" / "xsens_imu.csv",
         dataset / "calibration" / "Vehicle2IMU.txt",
     ]
-    if mode in ("base", "visual", "vio", "all"):
+    if mode in (
+        "base",
+        "visual",
+        "vio",
+        "gps",
+        "gps_dropout",
+        "gps_sparse",
+        "all",
+    ):
         required.extend(
             (
                 dataset / "sensor_data" / "encoder.csv",
@@ -74,6 +91,13 @@ def _require_inputs(dataset: Path, *, mode: str, validate: bool) -> None:
                 dataset / "calibration" / "Vehicle2Stereo.txt",
                 dataset / "image" / "stereo_left",
                 dataset / "image" / "stereo_right",
+            )
+        )
+    if mode in ("gps", "gps_dropout", "gps_sparse", "all"):
+        required.extend(
+            (
+                dataset / "sensor_data" / "gps.csv",
+                dataset / "calibration" / "Vehicle2GPS.txt",
             )
         )
     missing = [path for path in required if not path.exists()]
@@ -133,6 +157,8 @@ def _run_filter(
     wheels: list[WheelMeasurement],
     relative_streams: list[list[RelativeMotion]] | None = None,
     relative_epoch_streams: list[list[RelativePoseEpoch]] | None = None,
+    gps_stream: list[GpsMeasurement] | None = None,
+    gps_antenna_offset_xy_m: np.ndarray | None = None,
     *,
     max_events: int | None,
 ) -> ExperimentResult:
@@ -143,15 +169,19 @@ def _run_filter(
     states: list[Estimate] = []
     wheel_count = rejected = 0
     relative_count = rejected_relative = relative_available = 0
+    gps_count = rejected_gps = gps_available = 0
     event_count = 0
     diagnostics_path = config.general.output / f"diagnostics_{name}.csv"
     relative_path = config.general.output / f"diagnostics_relative_{name}.csv"
+    gps_path = config.general.output / f"diagnostics_gps_{name}.csv"
     with (
         diagnostics_path.open("w", newline="", encoding="utf-8") as stream,
         relative_path.open("w", newline="", encoding="utf-8") as relative_stream,
+        gps_path.open("w", newline="", encoding="utf-8") as gps_stream_file,
     ):
         writer = csv.writer(stream, lineterminator="\n")
         relative_writer = csv.writer(relative_stream, lineterminator="\n")
+        gps_writer = csv.writer(gps_stream_file, lineterminator="\n")
         writer.writerow(
             (
                 "timestamp_ns",
@@ -182,9 +212,22 @@ def _run_filter(
                 "used_as_correction",
             )
         )
+        gps_writer.writerow(
+            (
+                "timestamp_ns",
+                "easting_m",
+                "northing_m",
+                "position_nis",
+                "covariance_scale",
+                "accepted",
+                "update_kind",
+            )
+        )
         streams = [imu, wheels]
         streams.extend(relative_streams or [])
         streams.extend(relative_epoch_streams or [])
+        if gps_stream:
+            streams.append(gps_stream)
         for event in ordered_sensor_events(*streams):
             if isinstance(event, ImuSample):
                 estimate = estimator.predict(event)
@@ -211,6 +254,30 @@ def _run_filter(
                         else f"{estimator.last_wheel_yaw_nis:.6f}",
                         estimator.last_wheel_accepted,
                         estimator.last_wheel_yaw_accepted,
+                    )
+                )
+            elif isinstance(event, GpsMeasurement):
+                if estimator.timestamp_ns is None or estimator.current_imu is None:
+                    continue
+                if gps_antenna_offset_xy_m is None:
+                    raise ValueError("GPS stream requires an antenna offset")
+                gps_available += 1
+                estimator.update_gps(event, gps_antenna_offset_xy_m)
+                gps_count += int(estimator.last_gps_update_kind == "position")
+                rejected_gps += int(estimator.last_gps_update_kind == "rejected")
+                gps_writer.writerow(
+                    (
+                        event.timestamp_ns,
+                        f"{event.easting_m:.6f}",
+                        f"{event.northing_m:.6f}",
+                        ""
+                        if estimator.last_gps_nis is None
+                        else f"{estimator.last_gps_nis:.6f}",
+                        ""
+                        if estimator.last_gps_covariance_scale is None
+                        else f"{estimator.last_gps_covariance_scale:.6f}",
+                        estimator.last_gps_accepted,
+                        estimator.last_gps_update_kind,
                     )
                 )
             elif isinstance(event, RelativePoseEpoch):
@@ -271,6 +338,9 @@ def _run_filter(
         relative_count,
         rejected_relative,
         relative_available,
+        gps_count,
+        rejected_gps,
+        gps_available,
     )
 
 
@@ -292,6 +362,8 @@ def _format_summary(results: list[ExperimentResult]) -> str:
             f"rejected={result.rejected_wheel_updates}, "
             f"relative={result.relative_updates}/{result.available_relative_updates}, "
             f"relative_rejected={result.rejected_relative_updates}, "
+            f"gps={result.gps_updates}/{result.available_gps_updates}, "
+            f"gps_rejected={result.rejected_gps_updates}, "
             f"final=({final.x_m:.3f}, {final.y_m:.3f}) m"
         )
         if result.evaluation is not None:
@@ -326,6 +398,22 @@ def run(
     config.general.output.mkdir(parents=True, exist_ok=True)
     imu = list(read_imu(config.general.dataset))
     wheels = _load_wheels(config)
+    gps_streams: dict[str, list[GpsMeasurement]] = {}
+    gps_antenna_offset_xy_m: np.ndarray | None = None
+    if mode in ("gps", "gps_dropout", "gps_sparse", "all"):
+        gps_streams = gps_scenarios(
+            list(read_gps(config.general.dataset)), wheels, config.gps
+        )
+        _, gps_translation = read_rigid_transform(
+            config.general.dataset / "calibration" / "Vehicle2GPS.txt"
+        )
+        gps_antenna_offset_xy_m = gps_translation[:2]
+        print(
+            "gps streams: "
+            + ", ".join(
+                f"{name}={len(stream)}" for name, stream in gps_streams.items()
+            )
+        )
     visual: VisualOdometryResult | None = None
     visual_ready = False
     if mode in ("visual", "all"):
@@ -357,7 +445,11 @@ def run(
             f"states={len(vio.states)}"
         )
 
-    filter_modes = ["base", "visual"] if mode == "all" else [mode]
+    filter_modes = (
+        ["base", "visual", "gps", "gps_dropout", "gps_sparse"]
+        if mode == "all"
+        else [mode]
+    )
     results: list[ExperimentResult] = []
     for name in filter_modes:
         if name == "vio":
@@ -375,6 +467,8 @@ def run(
                 wheels,
                 relative_streams,
                 relative_epoch_streams,
+                gps_streams.get(name),
+                gps_antenna_offset_xy_m,
                 max_events=max_events,
             )
         )
@@ -393,6 +487,14 @@ def run(
                 available_relative_updates=vio.attempted_pairs,
             )
         )
+    if mode == "all":
+        order = {
+            name: index
+            for index, name in enumerate(
+                ("base", "visual", "vio", "gps", "gps_dropout", "gps_sparse")
+            )
+        }
+        results.sort(key=lambda result: order[result.name])
 
     if validate:
         reference = list(read_vrs_reference(config.general.dataset))

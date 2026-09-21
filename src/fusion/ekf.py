@@ -13,7 +13,13 @@ from dataclasses import dataclass
 import numpy as np
 
 from src.common.config import RunConfig
-from src.common.models import Estimate, ImuSample, RelativeMotion, WheelMeasurement
+from src.common.models import (
+    Estimate,
+    GpsMeasurement,
+    ImuSample,
+    RelativeMotion,
+    WheelMeasurement,
+)
 
 
 @dataclass
@@ -43,6 +49,13 @@ class VehicleEKF:
         self.last_relative_pose_nis: float | None = None
         self.last_relative_pose_accepted: bool | None = None
         self.last_relative_pose_covariance_scale: float | None = None
+        self.last_gps_nis: float | None = None
+        self.last_gps_accepted: bool | None = None
+        self.last_gps_covariance_scale: float | None = None
+        self.last_gps_update_kind: str | None = None
+        self._gps_anchor_global: np.ndarray | None = None
+        self._gps_anchor_local: np.ndarray | None = None
+        self._gps_global_to_local_yaw: float | None = None
         self._relative_pose_anchors: dict[str, _RelativePoseAnchor] = {}
 
     def _estimate(self) -> Estimate:
@@ -214,6 +227,104 @@ class VehicleEKF:
                 self.config.wheel.yaw_rate_std_rad_s**2,
                 self.config.wheel.yaw_nis_threshold,
             )
+        return self._estimate()
+
+    def update_gps(
+        self,
+        measurement: GpsMeasurement,
+        antenna_offset_xy_m: np.ndarray,
+    ) -> Estimate:
+        """Fuse a commercial GPS antenna position with lever-arm compensation."""
+        self._advance(measurement.timestamp_ns)
+        if antenna_offset_xy_m.shape != (2,):
+            raise ValueError("GPS antenna offset must contain x and y")
+        yaw = float(self.x[2])
+        cosine, sine = math.cos(yaw), math.sin(yaw)
+        lever_x, lever_y = map(float, antenna_offset_xy_m)
+        antenna = np.array(
+            (
+                self.x[0] + cosine * lever_x - sine * lever_y,
+                self.x[1] + sine * lever_x + cosine * lever_y,
+            )
+        )
+        global_position = np.array(
+            (measurement.easting_m, measurement.northing_m)
+        )
+        if self._gps_anchor_global is None:
+            self._gps_anchor_global = global_position
+            self._gps_anchor_local = antenna
+            self.last_gps_nis = None
+            self.last_gps_accepted = None
+            self.last_gps_covariance_scale = None
+            self.last_gps_update_kind = "initializing"
+            return self._estimate()
+        assert self._gps_anchor_local is not None
+        global_delta = global_position - self._gps_anchor_global
+        local_delta = antenna - self._gps_anchor_local
+        if self._gps_global_to_local_yaw is None:
+            if (
+                np.linalg.norm(global_delta)
+                < self.config.gps.initial_alignment_distance_m
+                or np.linalg.norm(local_delta)
+                < 0.5 * self.config.gps.initial_alignment_distance_m
+            ):
+                self.last_gps_nis = None
+                self.last_gps_accepted = None
+                self.last_gps_covariance_scale = None
+                self.last_gps_update_kind = "initializing"
+                return self._estimate()
+            self._gps_global_to_local_yaw = math.atan2(
+                local_delta[1], local_delta[0]
+            ) - math.atan2(global_delta[1], global_delta[0])
+        alignment_cosine = math.cos(self._gps_global_to_local_yaw)
+        alignment_sine = math.sin(self._gps_global_to_local_yaw)
+        global_to_local = np.array(
+            (
+                (alignment_cosine, -alignment_sine),
+                (alignment_sine, alignment_cosine),
+            )
+        )
+        measured_local = self._gps_anchor_local + global_to_local @ global_delta
+        residual = measured_local - antenna
+        h = np.zeros((2, 6))
+        h[0, 0] = h[1, 1] = 1.0
+        h[0, 2] = -sine * lever_x - cosine * lever_y
+        h[1, 2] = cosine * lever_x - sine * lever_y
+        minimum_variance = self.config.gps.min_position_std_m**2
+        covariance_xx = max(measurement.covariance_xx_m2, minimum_variance)
+        covariance_yy = max(measurement.covariance_yy_m2, minimum_variance)
+        covariance_xy_limit = 0.99 * math.sqrt(covariance_xx * covariance_yy)
+        covariance_xy = float(
+            np.clip(
+                measurement.covariance_xy_m2,
+                -covariance_xy_limit,
+                covariance_xy_limit,
+            )
+        )
+        covariance = np.array(
+            ((covariance_xx, covariance_xy), (covariance_xy, covariance_yy))
+        )
+        covariance = global_to_local @ covariance @ global_to_local.T
+        innovation = h @ self.P @ h.T + covariance
+        raw_nis = float(residual.T @ np.linalg.solve(innovation, residual))
+        required_scale = max(
+            1.0, raw_nis / self.config.gps.position_nis_threshold
+        )
+        self.last_gps_covariance_scale = required_scale
+        if required_scale > self.config.gps.max_covariance_scale:
+            self.last_gps_nis = raw_nis
+            self.last_gps_accepted = False
+            self.last_gps_update_kind = "rejected"
+            return self._estimate()
+        self.last_gps_nis, self.last_gps_accepted = self._vector_update(
+            residual,
+            h,
+            covariance * required_scale,
+            self.config.gps.position_nis_threshold * (1.0 + 1e-9),
+        )
+        self.last_gps_update_kind = (
+            "position" if self.last_gps_accepted else "rejected"
+        )
         return self._estimate()
 
     def update_relative_motion(self, measurement: RelativeMotion) -> Estimate:

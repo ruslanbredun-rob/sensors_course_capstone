@@ -43,6 +43,16 @@ class WheelConfig:
 
 
 @dataclass(frozen=True)
+class GpsConfig:
+    initial_alignment_distance_m: float
+    min_position_std_m: float
+    position_nis_threshold: float
+    max_covariance_scale: float
+    sparse_factor: int
+    dropout_ranges: tuple[tuple[float, float], ...]
+
+
+@dataclass(frozen=True)
 class VisualOdometryConfig:
     frame_step: int
     image_scale: float
@@ -85,6 +95,7 @@ class RunConfig:
     evaluation: EvaluationConfig
     imu: ImuConfig
     wheel: WheelConfig
+    gps: GpsConfig
     visual_odometry: VisualOdometryConfig
     vio: VioConfig
     fusion: FusionConfig
@@ -125,6 +136,7 @@ def load_config(
     evaluation = _section(values, "evaluation", config_path)
     imu = _section(values, "imu", config_path)
     wheel = _section(values, "wheel", config_path)
+    gps = _section(values, "gps", config_path)
     visual = _section(values, "visual_odometry", config_path)
     vio = _section(values, "vio", config_path)
     fusion = _section(values, "fusion", config_path)
@@ -158,6 +170,25 @@ def load_config(
         ),
         config_path,
     )
+    _positive(
+        gps,
+        "gps",
+        (
+            "min_position_std_m",
+            "initial_alignment_distance_m",
+            "position_nis_threshold",
+            "max_covariance_scale",
+            "sparse_factor",
+        ),
+        config_path,
+    )
+    dropout_ranges = tuple(
+        (float(start), float(end)) for start, end in gps["dropout_ranges"]
+    )
+    if not dropout_ranges or any(
+        not 0.0 <= start < end <= 1.0 for start, end in dropout_ranges
+    ):
+        raise ValueError(f"{config_path}: invalid gps.dropout_ranges")
     _positive(
         visual,
         "visual_odometry",
@@ -240,6 +271,14 @@ def load_config(
             yaw_rate_std_rad_s=float(wheel["yaw_rate_std_rad_s"]),
             speed_nis_threshold=float(wheel["speed_nis_threshold"]),
             yaw_nis_threshold=float(wheel["yaw_nis_threshold"]),
+        ),
+        gps=GpsConfig(
+            initial_alignment_distance_m=float(gps["initial_alignment_distance_m"]),
+            min_position_std_m=float(gps["min_position_std_m"]),
+            position_nis_threshold=float(gps["position_nis_threshold"]),
+            max_covariance_scale=float(gps["max_covariance_scale"]),
+            sparse_factor=int(gps["sparse_factor"]),
+            dropout_ranges=dropout_ranges,
         ),
         visual_odometry=VisualOdometryConfig(
             frame_step=int(visual["frame_step"]),

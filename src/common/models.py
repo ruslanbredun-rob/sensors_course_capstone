@@ -29,6 +29,16 @@ class WheelMeasurement:
 
 
 @dataclass(frozen=True)
+class GpsMeasurement:
+    timestamp_ns: int
+    easting_m: float
+    northing_m: float
+    covariance_xx_m2: float
+    covariance_xy_m2: float
+    covariance_yy_m2: float
+
+
+@dataclass(frozen=True)
 class RelativeMotion:
     timestamp_ns: int
     dt_s: float

@@ -18,6 +18,9 @@ DISPLAY_NAMES = {
     "base": "INS baseline (IMU + wheel)",
     "visual": "Baseline + stereo VO",
     "vio": "Stereo VIO + wheels",
+    "gps": "Commercial GPS",
+    "gps_dropout": "GPS dropout (20–40%, 50–70%)",
+    "gps_sparse": "Commercial GPS at 1/10 rate",
 }
 
 

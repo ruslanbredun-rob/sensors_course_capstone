@@ -21,6 +21,7 @@ from src.common.config import load_config
 from src.common.models import (
     EncoderSample,
     Estimate,
+    GpsMeasurement,
     ImuSample,
     PositionReference,
     RelativeMotion,
@@ -30,6 +31,8 @@ from src.common.synchronization import ordered_events
 from src.dataset.readers import read_vrs_reference
 from src.evaluation.metrics import evaluate_position, evaluate_rtk_segments
 from src.fusion.ekf import VehicleEKF
+from src.gps.reader import wgs84_to_utm
+from src.gps.scenarios import gps_scenarios
 from src.imu.reader import read_imu
 from src.wheel.odometry import wheel_measurements
 
@@ -46,6 +49,7 @@ class PrototypeTests(unittest.TestCase):
         self.assertEqual(config.evaluation.reference_fix_state, 4)
         self.assertGreater(config.imu.gyro_std_rad_s, 0.0)
         self.assertGreater(config.wheel.speed_nis_threshold, 0.0)
+        self.assertEqual(config.gps.sparse_factor, 10)
         self.assertGreater(config.visual_odometry.min_matches, 0)
         self.assertLessEqual(config.visual_odometry.min_fusion_coverage, 1.0)
         self.assertGreater(config.vio.window_size, 1)
@@ -62,6 +66,23 @@ class PrototypeTests(unittest.TestCase):
             )
             sample = next(read_vrs_reference(Path(directory)))
             self.assertEqual((sample.x_m, sample.y_m, sample.fix_state), (325285.5, 4150987.25, 4))
+
+    def test_wgs84_to_utm_matches_dataset_reference(self) -> None:
+        easting_m, northing_m = wgs84_to_utm(
+            37.522333010000004,
+            126.93858456166666,
+        )
+        self.assertAlmostEqual(easting_m, 317835.1, delta=0.5)
+        self.assertAlmostEqual(northing_m, 4154815.6, delta=0.5)
+
+    def test_gps_scenarios_apply_route_dropout_and_sparse_rate(self) -> None:
+        config = load_config(Path("config/default.json"))
+        gps = [GpsMeasurement(i * 1_000_000_000, i, 0.0, 4.0, 0.0, 4.0) for i in range(101)]
+        wheels = [WheelMeasurement(i * 1_000_000_000, 1.0, 0.0) for i in range(101)]
+        scenarios = gps_scenarios(gps, wheels, config.gps)
+        self.assertEqual(len(scenarios["gps"]), 101)
+        self.assertEqual(len(scenarios["gps_dropout"]), 61)
+        self.assertEqual(len(scenarios["gps_sparse"]), 11)
 
     def test_se2_validation_excludes_float_fixes_and_never_fits_scale(self) -> None:
         xy = [(0, 0), (1, 0), (1, 1), (2, 1), (2, 2)]
@@ -242,6 +263,24 @@ class PrototypeTests(unittest.TestCase):
         self.assertGreater(estimate.speed_m_s, 9.0)
         self.assertTrue(filter_.last_wheel_accepted)
         self.assertEqual(filter_.predict(events[2]).timestamp_ns, 20000000)
+
+    def test_gps_aligns_global_axes_before_position_updates(self) -> None:
+        config = load_config(Path("config/default.json"))
+        filter_ = VehicleEKF(config)
+        filter_.predict(ImuSample(0, 0.0, 0.0))
+        covariance = (4.0, 0.0, 4.0)
+        filter_.update_gps(
+            GpsMeasurement(0, 100.0, 200.0, *covariance),
+            np.zeros(2),
+        )
+        self.assertEqual(filter_.last_gps_update_kind, "initializing")
+        filter_.x[0] = 60.0
+        filter_.update_gps(
+            GpsMeasurement(10_000_000, 100.0, 260.0, *covariance),
+            np.zeros(2),
+        )
+        self.assertEqual(filter_.last_gps_update_kind, "position")
+        self.assertTrue(filter_.last_gps_accepted)
 
     def test_relative_motion_updates_speed_and_gyro_bias(self) -> None:
         config = load_config(Path("config/default.json"))

@@ -5,10 +5,22 @@ from __future__ import annotations
 import heapq
 from collections.abc import Iterable, Iterator
 
-from .models import ImuSample, RelativeMotion, RelativePoseEpoch, WheelMeasurement
+from .models import (
+    GpsMeasurement,
+    ImuSample,
+    RelativeMotion,
+    RelativePoseEpoch,
+    WheelMeasurement,
+)
 
 
-SensorEvent = ImuSample | WheelMeasurement | RelativeMotion | RelativePoseEpoch
+SensorEvent = (
+    GpsMeasurement
+    | ImuSample
+    | WheelMeasurement
+    | RelativeMotion
+    | RelativePoseEpoch
+)
 
 
 def ordered_sensor_events(*streams: Iterable[SensorEvent]) -> Iterator[SensorEvent]:

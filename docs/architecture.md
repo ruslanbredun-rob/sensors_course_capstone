@@ -7,7 +7,10 @@
 | `base` | Planar EKF | IMU + wheel encoders |
 | `visual` | Planar EKF з pose-clone update | IMU + wheels + stereo VO |
 | `vio` | Sliding-window nonlinear optimization | IMU + wheels + stereo features |
-| `all` | Запускає три конфігурації для порівняння | усі перелічені вище |
+| `gps` | Planar EKF | IMU + wheels + commercial GPS |
+| `gps_dropout` | Planar EKF | GPS вимкнено на 20–40% та 50–70% шляху |
+| `gps_sparse` | Planar EKF | кожне десяте commercial GPS measurement |
+| `all` | Запускає шість конфігурацій для порівняння | усі перелічені вище |
 
 VIO є окремою траєкторією. IMU та колеса утворюють motion backbone, а camera
 reprojection додається у спільну оптимізацію.
@@ -21,6 +24,8 @@ flowchart LR
     WK --> EKF
     CAM[Stereo images] --> VO[Metric stereo VO]
     VO --> EKF
+    CGPS[gps.csv] --> GATE[UTM + frame alignment + NIS]
+    GATE --> EKF
 
     CAM --> FEAT[Rectify, ORB, stereo depth]
     IMU --> PRE[IMU preintegration]
@@ -42,6 +47,7 @@ flowchart LR
 | `src/common/` | typed config, data contracts, timestamp merge |
 | `src/dataset/` | dataset і calibration readers |
 | `src/imu/`, `src/wheel/` | sensor adapters та wheel kinematics |
+| `src/gps/` | commercial GPS reader, UTM conversion та availability scenarios |
 | `src/camera/visual_odometry.py` | окремий relative stereo VO frontend |
 | `src/camera/vio.py` | features, preintegration, window optimization, VIO cache |
 | `src/fusion/` | baseline EKF та orchestration |
@@ -65,6 +71,17 @@ landmarks у попередньому camera frame; ORB tracks задають 2D
 Початкова pose дорівнює `(0,0,0)`. Початкова швидкість ініціалізується wheel
 preintegration. Після заповнення вікна найстаріша pose
 фіксує локальний gauge, а estimator продовжує fixed-lag оптимізацію.
+
+## Commercial GPS
+
+`gps.csv` містить WGS84 latitude/longitude та position covariance. Reader
+перетворює координати в UTM. Оскільки локальний INS має довільний початковий
+yaw, GPS frame вирівнюється з першими 50 м локального руху без використання
+VRS. `Vehicle2GPS.txt` компенсує antenna lever arm. Position update застосовує
+adaptive covariance inflation за NIS.
+
+Dropout progress визначається за накопиченою абсолютною wheel distance. Sparse
+режим детерміновано залишає кожне десяте GPS measurement.
 
 ## Оцінка
 
