@@ -29,7 +29,9 @@ PnP RANSAC використовується для outlier rejection та поч
 але фінальний рух визначає спільна nonlinear optimization. `least_squares`
 використовує Huber loss. PnP increment також проходить consistency gate проти
 wheel translation/yaw. Reprojection group нормалізується за кількістю tracks,
-щоб корельовані pixels не переважували IMU та wheel factors.
+щоб корельовані pixels не переважували IMU та wheel factors. Wheel yaw має
+меншу covariance у VIO, а `visual_factor_weight` обмежує накопичення camera yaw
+bias на довгому маршруті.
 
 ## Runtime
 

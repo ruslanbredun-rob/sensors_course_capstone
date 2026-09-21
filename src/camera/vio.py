@@ -6,7 +6,7 @@ import csv
 import json
 import math
 from bisect import bisect_right
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import cv2
@@ -259,6 +259,25 @@ def _visual_consistent_with_wheels(
     )
 
 
+def _visual_wheel_weight(
+    visual: FeatureFactor,
+    wheel: WheelPreintegration,
+    config: RunConfig,
+) -> float:
+    wheel_delta = np.array((wheel.mean_speed_m_s * wheel.dt_s, 0.0))
+    translation_ratio = (
+        np.linalg.norm(visual.initial_delta_vehicle_m[:2] - wheel_delta)
+        / config.vio.wheel_translation_gate_m
+    )
+    yaw_ratio = abs(
+        _wrap(
+            visual.initial_dyaw_rad
+            - wheel.mean_yaw_rate_rad_s * wheel.dt_s
+        )
+    ) / config.vio.wheel_yaw_gate_rad
+    return max(0.05, math.exp(-2.0 * (translation_ratio**2 + yaw_ratio**2)))
+
+
 class FeatureWindowVio:
     """Jointly optimize planar poses, speeds and IMU biases."""
 
@@ -363,11 +382,11 @@ class FeatureWindowVio:
                 result.extend(
                     (
                         (0.5 * (first[3] + second[3]) - wheel.mean_speed_m_s)
-                        / self.config.wheel.speed_std_m_s,
+                        / vio.wheel_speed_std_m_s,
                         _wrap(
                             yaw_delta - wheel.mean_yaw_rate_rad_s * wheel.dt_s
                         )
-                        / (self.config.wheel.yaw_rate_std_rad_s * wheel.dt_s),
+                        / (vio.wheel_yaw_rate_std_rad_s * wheel.dt_s),
                     )
                 )
                 if edge.visual is None:
@@ -393,8 +412,10 @@ class FeatureWindowVio:
                 # errors. Normalize the group so many correlated pixels cannot
                 # overwhelm the IMU and wheel factors.
                 group_scale = math.sqrt(2.0 * len(factor.points_current_px))
-                reprojection = (predicted - factor.points_current_px) / (
-                    vio.reprojection_std_px * group_scale
+                reprojection = (
+                    math.sqrt(vio.visual_factor_weight * factor.quality)
+                    * (predicted - factor.points_current_px)
+                    / (vio.reprojection_std_px * group_scale)
                 )
                 result.extend(reprojection.ravel())
             return np.asarray(result)
@@ -560,6 +581,12 @@ def compute_vio_trajectory(
             visual_factor, wheel_factor, config
         ):
             visual_factor = None
+        elif visual_factor is not None:
+            visual_factor = replace(
+                visual_factor,
+                quality=visual_factor.quality
+                * _visual_wheel_weight(visual_factor, wheel_factor, config),
+            )
         visual_factors += int(visual_factor is not None)
         rejected += int(visual_factor is None)
         states.append(

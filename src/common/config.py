@@ -58,6 +58,9 @@ class VioConfig:
     min_tracks: int
     max_tracks: int
     reprojection_std_px: float
+    visual_factor_weight: float
+    wheel_speed_std_m_s: float
+    wheel_yaw_rate_std_rad_s: float
     wheel_translation_gate_m: float
     wheel_yaw_gate_rad: float
     imu_position_std_m: float
@@ -176,6 +179,9 @@ def load_config(
             "min_tracks",
             "max_tracks",
             "reprojection_std_px",
+            "visual_factor_weight",
+            "wheel_speed_std_m_s",
+            "wheel_yaw_rate_std_rad_s",
             "wheel_translation_gate_m",
             "wheel_yaw_gate_rad",
             "imu_position_std_m",
@@ -193,6 +199,8 @@ def load_config(
         )
     if int(vio["max_tracks"]) < int(vio["min_tracks"]):
         raise ValueError(f"{config_path}: vio track bounds are inverted")
+    if float(vio["visual_factor_weight"]) > 1.0:
+        raise ValueError(f"{config_path}: vio.visual_factor_weight must be <= 1")
     _positive(
         fusion,
         "fusion",
@@ -246,6 +254,9 @@ def load_config(
             min_tracks=int(vio["min_tracks"]),
             max_tracks=int(vio["max_tracks"]),
             reprojection_std_px=float(vio["reprojection_std_px"]),
+            visual_factor_weight=float(vio["visual_factor_weight"]),
+            wheel_speed_std_m_s=float(vio["wheel_speed_std_m_s"]),
+            wheel_yaw_rate_std_rad_s=float(vio["wheel_yaw_rate_std_rad_s"]),
             wheel_translation_gate_m=float(vio["wheel_translation_gate_m"]),
             wheel_yaw_gate_rad=float(vio["wheel_yaw_gate_rad"]),
             imu_position_std_m=float(vio["imu_position_std_m"]),
