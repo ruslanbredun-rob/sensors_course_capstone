@@ -1,139 +1,79 @@
 # Архітектура GPS-denied локалізації
 
-## Призначення
-
-Pipeline оцінює planar state автомобіля без GNSS measurement у фільтрі:
-
-```text
-[x, y, yaw, speed, gyro_z_bias, accel_x_bias]
-```
-
-VRS-GPS читається тільки після estimator run для незалежної оцінки.
-
 ## Режими
 
-| Режим | Дані у fusion |
-|---|---|
-| `base` | IMU prediction + wheel speed і differential yaw |
-| `visual` | Baseline + stereo `dx,dy,dyaw` |
-| `vio` | Baseline + sliding-window visual-inertial `dx,dy,dyaw` |
-| `lidar` | Baseline + scan-to-scan LiDAR `dx,dy,dyaw` |
-| `full` | Baseline + LiDAR; VIO заповнює прогалини LiDAR |
+| Режим | Estimator | Сенсори |
+|---|---|---|
+| `base` | Planar EKF | IMU + wheel encoders |
+| `visual` | Planar EKF з pose-clone update | IMU + wheels + stereo VO |
+| `vio` | Sliding-window nonlinear optimization | stereo features + IMU |
+| `all` | Запускає три конфігурації для порівняння | усі перелічені вище |
 
-IMU-only режим не використовується: acceleration bias швидко руйнує оцінку
-лінійної швидкості. Колеса дають speed і кінематичний yaw rate, IMU дає швидку
-динаміку та angular rate.
+VIO є окремою траєкторією. Вона не надходить назад у baseline EKF, тому одна й
+та сама IMU інформація не враховується двічі.
 
 ## Data flow
 
 ```mermaid
 flowchart LR
-    ENC[encoder.csv] --> W[Wheel kinematics]
+    ENC[encoder.csv] --> WK[Wheel kinematics]
     IMU[xsens_imu.csv] --> EKF[Planar EKF]
-    W --> EKF
+    WK --> EKF
+    CAM[Stereo images] --> VO[Metric stereo VO]
+    VO --> EKF
 
-    CAM[Stereo PNG] --> VO[Rectify + ORB + RANSAC + stereo scale]
-    IMU --> PRE[Camera-interval preintegration]
-    VO --> VIO[Sliding-window speed yaw and bias optimization]
-    PRE --> VIO
-    VLP[VLP_left BIN] --> LO[Vehicle transform + filter + scan-to-scan ICP]
-    W -->|initial guess| LO
+    CAM --> FEAT[Rectify, ORB, stereo depth]
+    IMU --> PRE[IMU preintegration]
+    FEAT --> WIN[Sliding-window VIO]
+    PRE --> WIN
 
-    VO --> GATE[Quality, coverage and NIS]
-    VIO --> GATE
-    LO --> GATE
-    GATE -->|body dx dy dyaw| EKF
-
-    EKF --> STATE[estimated_state_mode.csv]
-    STATE --> EVAL[SE2 and RTK segment evaluation]
-    VRS[vrs_gps.csv fix 4] --> EVAL
-    EVAL --> OUT[CSV metrics + PNG plots]
+    EKF --> EVAL[VRS-only evaluation]
+    WIN --> EVAL
+    GPS[vrs_gps.csv fix 4] --> EVAL
+    EVAL --> OUT[CSV metrics and PNG plots]
 ```
 
-## Модулі
+## Межі модулів
 
 | Пакет | Відповідальність |
 |---|---|
-| `src/main.py` | CLI та path overrides |
-| `src/common/` | Config, data contracts, timestamp merge |
-| `src/dataset/` | Dataset і calibration readers |
-| `src/imu/` | IMU reader |
-| `src/wheel/` | Encoder calibration та wheel kinematics |
-| `src/camera/` | Stereo VO, IMU preintegration і sliding-window VIO |
-| `src/lidar/` | VLP preprocessing та scan-to-scan ICP |
-| `src/fusion/` | EKF, pose clones, gates та orchestration |
-| `src/evaluation/` | VRS matching, metrics, RTK segments і plots |
+| `src/common/` | typed config, data contracts, timestamp merge |
+| `src/dataset/` | dataset і calibration readers |
+| `src/imu/`, `src/wheel/` | sensor adapters та wheel kinematics |
+| `src/camera/visual_odometry.py` | окремий relative stereo VO frontend |
+| `src/camera/vio.py` | features, preintegration, window optimization, VIO cache |
+| `src/fusion/` | baseline EKF та orchestration |
+| `src/evaluation/` | RTK matching, метрики й графіки |
 
-Config розбитий на секції `general`, `evaluation`, `imu`, `wheel`,
-`visual_odometry`, `lidar_odometry` та `fusion`.
+## Baseline та VO
 
-## Baseline EKF
+EKF state має вигляд `[x, y, yaw, speed, gyro_bias, accel_bias]`. IMU виконує
+prediction, wheel speed і differential yaw rate виконують correction. Stereo VO
+передає body-frame `dx,dy,dyaw`; pose-clone update порівнює цей increment зі
+зміною стану. NIS керує covariance inflation та rejection.
 
-IMU yaw rate і forward acceleration виконують prediction. Wheel speed коригує
-`speed`; differential wheel yaw rate разом з IMU gyro коригує `gyro_z_bias`.
-Wheel updates використовують fixed configured covariance та hard NIS gate.
-Covariance оновлюється у Joseph form.
+## VIO
 
-Окремого slip detector немає. Він рідко активувався на реальних sequences та
-іноді відкидав корисні wheel updates. Wheel outliers обмежує NIS gate.
+VIO state кожного camera epoch містить planar pose і forward speed. Спільні
+змінні вікна містять gyro та accelerometer biases. Stereo disparity створює 3D
+landmarks у попередньому camera frame; ORB tracks задають 2D observations у
+наступному frame. Оптимізатор одночасно мінімізує reprojection та IMU residuals.
 
-## Continuous VO/LO update
+Початкова pose дорівнює `(0,0,0)`. Початкова швидкість ініціалізується першою
+валідною metric stereo translation. Після заповнення вікна найстаріша pose
+фіксує локальний gauge, а estimator продовжує fixed-lag оптимізацію.
 
-VO і LO повертають transform між послідовними frames у vehicle body frame:
+## Оцінка
 
-```text
-z = [dx_body, dy_body, dyaw]
-```
+Тільки `fix_state=4` використовується як reference. Global ATE застосовує один
+rigid SE(2) alignment без scale. Initial-pose view вирівнює спільну стартову
+точку й напрям. Саме initial-pose графік показує реальний accumulated drift.
 
-На попередньому frontend epoch EKF зберігає pose clone, covariance та
-cross-covariance. Поточна pose перетворюється у frame anchor, після чого
-innovation по `x,y,yaw` коригує state. Це зберігає relative характер
-measurement і не перетворює VO/LO на абсолютну позицію.
+## Межі реалізації
 
-Raw NIS вище soft threshold збільшує measurement covariance. Update повністю
-відкидається, якщо потрібний covariance scale перевищує 100. Frontend входить у
-fusion лише за достатнього coverage. LiDAR додатково потребує не менше 5% часу
-з `|wheel yaw rate| >= 0.08 rad/s`; це non-GPS motion gate, який не дозволяє
-накопичувати слабко спостережуваний yaw bias на майже прямому маршруті. У `full`
-режимі LiDAR має пріоритет, а VO використовується у прогалинах, бо ці
-measurements корельовані.
-
-## Frontends
-
-Stereo VO використовує rectification, ORB matching, RANSAC essential matrix,
-stereo disparity scale та camera-to-vehicle transform. Спрощений VIO додає IMU
-preintegration і robust sliding-window optimization швидкостей, yaw increments
-та biases. Це motion-factor estimator без feature reprojection; повна схема
-описана в [vio_architecture.md](vio_architecture.md).
-
-LiDAR frontend запускається після sequence-level motion gate, переводить left
-VLP-16 cloud у vehicle frame, фільтрує range і height, виконує voxel
-downsampling та scan-to-scan planar ICP. Wheel motion використовується як
-initial guess і sanity gate. Це стабільніше і простіше за коротку рухому local
-map, але все одно накопичує drift і не є LIO.
-
-## Evaluation та графіки
-
-Беруться тільки VRS samples з `fix_state=4`; matching tolerance становить 50 мс.
-Global SE(2) ATE використовує rigid alignment без scale fit. Графік траєкторії
-має одну спільну стартову точку; початковий напрям визначається за першим
-надійним відрізком близько 20 м. Завдяки цьому видно подальше розходження
-траєкторій, а шум RTK під час стоянки не задає випадковий yaw.
-
-RTK epochs також діляться на безперервні segments за gap 1.5 с. Segment metrics
-не впливають на EKF і показують фактичне reference coverage, особливо для
-`urban39`.
-
-## Обмеження і наступний рівень
-
-Прості VO та scan-to-scan LO не дають стабільного покращення baseline на всіх
-sequences. Вони додають локальні relative measurements, але не усувають
-систематичний yaw drift і не створюють глобального constraint.
-
-Для вищої точності потрібен один із наступних підходів:
-
-1. VIO з IMU preintegration та спільною оцінкою camera poses, velocity і biases.
-2. LIO зі справжнім IMU deskew, point-to-plane scan-to-map optimization та
-   local submap.
-3. LVIO, яке спільно використовує camera, LiDAR та IMU.
-4. Loop closure або зовнішній map constraint для корекції довготривалого drift.
+Це feature-level VIO для planar vehicle model. Воно вже не стискає camera data
+до готової VO pose до оптимізації, але не оцінює roll, pitch, gravity, повну 3D
+velocity, camera-IMU time offset або extrinsics. Sliding window використовує
+fixed-lag anchor замість Schur-complement marginalization. Для production VIO
+потрібні повний 3D IMU state, covariance preintegration, marginalization і loop
+closure.
