@@ -329,6 +329,24 @@ def _frontend_ready(accepted: int, attempted: int, minimum_coverage: float) -> b
     return attempted > 0 and accepted / attempted >= minimum_coverage
 
 
+def wheel_turning_fraction(
+    wheels: list[WheelMeasurement], *, yaw_rate_threshold_rad_s: float
+) -> float:
+    """Return the duration-weighted fraction with informative turning motion."""
+    if len(wheels) < 2:
+        return 0.0
+    total_duration_s = 0.0
+    turning_duration_s = 0.0
+    for previous, current in zip(wheels, wheels[1:]):
+        dt_s = (current.timestamp_ns - previous.timestamp_ns) * 1e-9
+        if dt_s <= 0.0:
+            raise ValueError("Wheel timestamps are not strictly increasing")
+        total_duration_s += dt_s
+        if abs(current.yaw_rate_rad_s) >= yaw_rate_threshold_rad_s:
+            turning_duration_s += dt_s
+    return turning_duration_s / total_duration_s if total_duration_s else 0.0
+
+
 def run(
     config: RunConfig,
     mode: str,
@@ -362,21 +380,37 @@ def run(
     lidar: LidarOdometryResult | None = None
     lidar_ready = False
     if mode in ("lidar", "full", "all"):
-        lidar = (
-            read_lidar_odometry(config)
-            if reuse_frontends
-            else compute_lidar_odometry(config, wheels)
+        turning_fraction = wheel_turning_fraction(
+            wheels,
+            yaw_rate_threshold_rad_s=(
+                config.lidar_odometry.turning_yaw_rate_rad_s
+            ),
         )
-        lidar_ready = _frontend_ready(
-            len(lidar.motions),
-            lidar.attempted_pairs,
-            config.lidar_odometry.min_fusion_coverage,
+        motion_ready = (
+            turning_fraction >= config.lidar_odometry.min_turning_fraction
         )
-        print(
-            f"lidar frontend: accepted={len(lidar.motions)}/"
-            f"{lidar.attempted_pairs}, rejected={lidar.rejected_pairs}, "
-            f"fusion={'enabled' if lidar_ready else 'disabled (low coverage)'}"
-        )
+        if motion_ready:
+            lidar = (
+                read_lidar_odometry(config)
+                if reuse_frontends
+                else compute_lidar_odometry(config, wheels)
+            )
+            lidar_ready = _frontend_ready(
+                len(lidar.motions),
+                lidar.attempted_pairs,
+                config.lidar_odometry.min_fusion_coverage,
+            )
+            print(
+                f"lidar frontend: accepted={len(lidar.motions)}/"
+                f"{lidar.attempted_pairs}, rejected={lidar.rejected_pairs}, "
+                f"turning={turning_fraction:.1%}, "
+                f"fusion={'enabled' if lidar_ready else 'disabled (low coverage)'}"
+            )
+        else:
+            print(
+                f"lidar frontend: skipped, turning={turning_fraction:.1%} "
+                f"< {config.lidar_odometry.min_turning_fraction:.1%}"
+            )
     modes = (
         ["base", "visual", "lidar", "full"]
         if mode == "all"

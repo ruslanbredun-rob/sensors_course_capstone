@@ -38,7 +38,9 @@
     "min_inlier_ratio": 0.35,
     "min_quality": 0.5,
     "initial_speed_m_s": 15.0,
-    "min_fusion_coverage": 0.25
+    "min_fusion_coverage": 0.25,
+    "turning_yaw_rate_rad_s": 0.08,
+    "min_turning_fraction": 0.05
   },
   "fusion": {
     "relative_speed_nis_threshold": 6.635,

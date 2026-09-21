@@ -23,6 +23,7 @@ from src.common.synchronization import ordered_events
 from src.dataset.readers import read_vrs_reference
 from src.evaluation.metrics import evaluate_position, evaluate_rtk_segments
 from src.fusion.ekf import VehicleEKF
+from src.fusion.pipeline import wheel_turning_fraction
 from src.imu.reader import read_imu
 from src.lidar.odometry import rigid_fit_2d
 from src.wheel.odometry import wheel_measurements
@@ -43,6 +44,7 @@ class PrototypeTests(unittest.TestCase):
         self.assertGreater(config.visual_odometry.min_matches, 0)
         self.assertLessEqual(config.visual_odometry.min_fusion_coverage, 1.0)
         self.assertGreater(config.lidar_odometry.voxel_m, 0.0)
+        self.assertLessEqual(config.lidar_odometry.min_turning_fraction, 1.0)
 
     def test_vrs_reader_uses_utm_and_fix_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -152,6 +154,17 @@ class PrototypeTests(unittest.TestCase):
             measurement = next(wheel_measurements(samples, path))
             self.assertAlmostEqual(measurement.speed_m_s, -math.pi / 2)
             self.assertEqual(measurement.yaw_rate_rad_s, 0.0)
+
+    def test_turning_fraction_is_duration_weighted(self) -> None:
+        wheels = [
+            WheelMeasurement(0, 1.0, 0.0),
+            WheelMeasurement(1_000_000_000, 1.0, 0.2),
+            WheelMeasurement(3_000_000_000, 1.0, 0.0),
+        ]
+        self.assertAlmostEqual(
+            wheel_turning_fraction(wheels, yaw_rate_threshold_rad_s=0.08),
+            1.0 / 3.0,
+        )
 
     def test_events_are_sorted_and_wheel_update_changes_estimate(self) -> None:
         events = list(

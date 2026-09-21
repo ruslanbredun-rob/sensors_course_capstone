@@ -18,7 +18,7 @@ DISPLAY_NAMES = {
     "base": "INS baseline (IMU + wheel)",
     "visual": "Baseline + stereo VO",
     "lidar": "Baseline + LiDAR (no camera)",
-    "full": "Baseline + stereo VO + LiDAR",
+    "full": "Selected fusion (VO/LiDAR health gates)",
 }
 
 

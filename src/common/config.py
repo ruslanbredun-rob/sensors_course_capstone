@@ -62,6 +62,8 @@ class LidarOdometryConfig:
     min_quality: float
     initial_speed_m_s: float
     min_fusion_coverage: float
+    turning_yaw_rate_rad_s: float
+    min_turning_fraction: float
 
 
 @dataclass(frozen=True)
@@ -177,6 +179,8 @@ def load_config(
             "min_quality",
             "initial_speed_m_s",
             "min_fusion_coverage",
+            "turning_yaw_rate_rad_s",
+            "min_turning_fraction",
         ),
         config_path,
     )
@@ -188,6 +192,10 @@ def load_config(
             raise ValueError(
                 f"{config_path}: {section_name}.min_fusion_coverage must be <= 1"
             )
+    if float(lidar["min_turning_fraction"]) > 1.0:
+        raise ValueError(
+            f"{config_path}: lidar_odometry.min_turning_fraction must be <= 1"
+        )
     _positive(
         fusion,
         "fusion",
@@ -246,6 +254,8 @@ def load_config(
             min_quality=float(lidar["min_quality"]),
             initial_speed_m_s=float(lidar["initial_speed_m_s"]),
             min_fusion_coverage=float(lidar["min_fusion_coverage"]),
+            turning_yaw_rate_rad_s=float(lidar["turning_yaw_rate_rad_s"]),
+            min_turning_fraction=float(lidar["min_turning_fraction"]),
         ),
         fusion=FusionConfig(
             relative_speed_nis_threshold=float(fusion["relative_speed_nis_threshold"]),
