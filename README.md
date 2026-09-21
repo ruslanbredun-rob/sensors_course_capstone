@@ -9,6 +9,8 @@ fusion і використовується лише для незалежної 
 - **INS baseline:** Xsens IMU prediction + wheel speed і differential
   wheel yaw rate;
 - **Baseline + stereo VO:** metric body-frame `dx, dy, dyaw` від stereo camera;
+- **Baseline + simplified VIO:** stereo motion factors + IMU preintegration у
+  robust sliding window;
 - **Baseline + LiDAR:** scan-to-scan planar ICP з left VLP-16;
 - **Selected fusion:** health-gated LiDAR corrections і stereo VO у прогалинах.
 
@@ -60,6 +62,17 @@ done
 Для tuning EKF без повторного обчислення VO/LO додайте
 `--reuse-frontends`. Кеші мають бути створені тією самою версією frontend.
 
+Експериментальний VIO з готовим stereo VO cache:
+
+```bash
+python -m src.main --mode vio --validate --reuse-frontends \
+  --dataset data/complex_urban/urban33 \
+  --output results/urban33
+```
+
+Якщо `vio_odometry.csv` відсутній, команда обчислить його з cached VO та IMU.
+Деталі estimator: [docs/vio_architecture.md](docs/vio_architecture.md).
+
 Окремий LiDAR experiment без читання camera frames:
 
 ```bash
@@ -96,6 +109,7 @@ Pipeline створює числові CSV і PNG:
 - `results/<sequence>/rtk_segment_metrics.csv`;
 - `results/<sequence>/validation_pairs.csv`;
 - `results/<sequence>/estimated_state_<mode>.csv`;
+- `results/<sequence>/vio_odometry.csv`;
 - `results/<sequence>/diagnostics*.csv`;
 - `results/<sequence>/screenshots/*.png`.
 

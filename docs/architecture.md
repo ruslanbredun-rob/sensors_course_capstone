@@ -16,8 +16,9 @@ VRS-GPS читається тільки після estimator run для неза
 |---|---|
 | `base` | IMU prediction + wheel speed і differential yaw |
 | `visual` | Baseline + stereo `dx,dy,dyaw` |
+| `vio` | Baseline + sliding-window visual-inertial `dx,dy,dyaw` |
 | `lidar` | Baseline + scan-to-scan LiDAR `dx,dy,dyaw` |
-| `full` | Baseline + LiDAR; VO заповнює прогалини LiDAR |
+| `full` | Baseline + LiDAR; VIO заповнює прогалини LiDAR |
 
 IMU-only режим не використовується: acceleration bias швидко руйнує оцінку
 лінійної швидкості. Колеса дають speed і кінематичний yaw rate, IMU дає швидку
@@ -32,10 +33,14 @@ flowchart LR
     W --> EKF
 
     CAM[Stereo PNG] --> VO[Rectify + ORB + RANSAC + stereo scale]
+    IMU --> PRE[Camera-interval preintegration]
+    VO --> VIO[Sliding-window speed yaw and bias optimization]
+    PRE --> VIO
     VLP[VLP_left BIN] --> LO[Vehicle transform + filter + scan-to-scan ICP]
     W -->|initial guess| LO
 
     VO --> GATE[Quality, coverage and NIS]
+    VIO --> GATE
     LO --> GATE
     GATE -->|body dx dy dyaw| EKF
 
@@ -54,7 +59,7 @@ flowchart LR
 | `src/dataset/` | Dataset і calibration readers |
 | `src/imu/` | IMU reader |
 | `src/wheel/` | Encoder calibration та wheel kinematics |
-| `src/camera/` | Stereo visual odometry |
+| `src/camera/` | Stereo VO, IMU preintegration і sliding-window VIO |
 | `src/lidar/` | VLP preprocessing та scan-to-scan ICP |
 | `src/fusion/` | EKF, pose clones, gates та orchestration |
 | `src/evaluation/` | VRS matching, metrics, RTK segments і plots |
@@ -96,8 +101,10 @@ measurements корельовані.
 ## Frontends
 
 Stereo VO використовує rectification, ORB matching, RANSAC essential matrix,
-stereo disparity scale та camera-to-vehicle transform. Простий frontend має
-нестабільний scale і sequence bias.
+stereo disparity scale та camera-to-vehicle transform. Спрощений VIO додає IMU
+preintegration і robust sliding-window optimization швидкостей, yaw increments
+та biases. Це motion-factor estimator без feature reprojection; повна схема
+описана в [vio_architecture.md](vio_architecture.md).
 
 LiDAR frontend запускається після sequence-level motion gate, переводить left
 VLP-16 cloud у vehicle frame, фільтрує range і height, виконує voxel
