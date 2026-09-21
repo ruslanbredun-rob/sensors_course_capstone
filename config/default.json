@@ -35,6 +35,8 @@
     "min_tracks": 25,
     "max_tracks": 60,
     "reprojection_std_px": 1.5,
+    "wheel_translation_gate_m": 1.5,
+    "wheel_yaw_gate_rad": 0.05,
     "imu_position_std_m": 0.2,
     "imu_accel_std_m_s2": 0.8,
     "imu_gyro_std_rad_s": 0.03,

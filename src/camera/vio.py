@@ -238,6 +238,27 @@ def _feature_factor(
     )
 
 
+def _visual_consistent_with_wheels(
+    visual: FeatureFactor,
+    wheel: WheelPreintegration,
+    config: RunConfig,
+) -> bool:
+    wheel_delta = np.array((wheel.mean_speed_m_s * wheel.dt_s, 0.0))
+    translation_error = np.linalg.norm(
+        visual.initial_delta_vehicle_m[:2] - wheel_delta
+    )
+    yaw_error = abs(
+        _wrap(
+            visual.initial_dyaw_rad
+            - wheel.mean_yaw_rate_rad_s * wheel.dt_s
+        )
+    )
+    return (
+        translation_error <= config.vio.wheel_translation_gate_m
+        and yaw_error <= config.vio.wheel_yaw_gate_rad
+    )
+
+
 class FeatureWindowVio:
     """Jointly optimize planar poses, speeds and IMU biases."""
 
@@ -368,9 +389,13 @@ class FeatureWindowVio:
                         k[1, 1] * points_camera1[:, 1] / valid_depth + k[1, 2],
                     )
                 )
-                reprojection = (
-                    predicted - factor.points_current_px
-                ) / vio.reprojection_std_px
+                # Tracks from one image pair share calibration, depth and motion
+                # errors. Normalize the group so many correlated pixels cannot
+                # overwhelm the IMU and wheel factors.
+                group_scale = math.sqrt(2.0 * len(factor.points_current_px))
+                reprojection = (predicted - factor.points_current_px) / (
+                    vio.reprojection_std_px * group_scale
+                )
                 result.extend(reprojection.ravel())
             return np.asarray(result)
 
@@ -530,6 +555,10 @@ def compute_vio_trajectory(
         try:
             visual_factor = _feature_factor(frontend, previous, current, config)
         except (cv2.error, np.linalg.LinAlgError):
+            visual_factor = None
+        if visual_factor is not None and not _visual_consistent_with_wheels(
+            visual_factor, wheel_factor, config
+        ):
             visual_factor = None
         visual_factors += int(visual_factor is not None)
         rejected += int(visual_factor is None)

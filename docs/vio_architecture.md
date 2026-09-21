@@ -27,7 +27,9 @@ Estimator будує GPS-denied траєкторію зі stereo camera, IMU т�
 
 PnP RANSAC використовується для outlier rejection та початкового наближення,
 але фінальний рух визначає спільна nonlinear optimization. `least_squares`
-використовує Huber loss.
+використовує Huber loss. PnP increment також проходить consistency gate проти
+wheel translation/yaw. Reprojection group нормалізується за кількістю tracks,
+щоб корельовані pixels не переважували IMU та wheel factors.
 
 ## Runtime
 

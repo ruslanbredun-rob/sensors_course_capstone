@@ -58,6 +58,8 @@ class VioConfig:
     min_tracks: int
     max_tracks: int
     reprojection_std_px: float
+    wheel_translation_gate_m: float
+    wheel_yaw_gate_rad: float
     imu_position_std_m: float
     imu_accel_std_m_s2: float
     imu_gyro_std_rad_s: float
@@ -174,6 +176,8 @@ def load_config(
             "min_tracks",
             "max_tracks",
             "reprojection_std_px",
+            "wheel_translation_gate_m",
+            "wheel_yaw_gate_rad",
             "imu_position_std_m",
             "imu_accel_std_m_s2",
             "imu_gyro_std_rad_s",
@@ -242,6 +246,8 @@ def load_config(
             min_tracks=int(vio["min_tracks"]),
             max_tracks=int(vio["max_tracks"]),
             reprojection_std_px=float(vio["reprojection_std_px"]),
+            wheel_translation_gate_m=float(vio["wheel_translation_gate_m"]),
+            wheel_yaw_gate_rad=float(vio["wheel_yaw_gate_rad"]),
             imu_position_std_m=float(vio["imu_position_std_m"]),
             imu_accel_std_m_s2=float(vio["imu_accel_std_m_s2"]),
             imu_gyro_std_rad_s=float(vio["imu_gyro_std_rad_s"]),

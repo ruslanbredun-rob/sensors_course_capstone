@@ -10,7 +10,13 @@ from pathlib import Path
 
 import numpy as np
 
-from src.camera.vio import preintegrate_imu, preintegrate_wheels
+from src.camera.vio import (
+    FeatureFactor,
+    WheelPreintegration,
+    _visual_consistent_with_wheels,
+    preintegrate_imu,
+    preintegrate_wheels,
+)
 from src.common.config import load_config
 from src.common.models import (
     EncoderSample,
@@ -172,6 +178,18 @@ class PrototypeTests(unittest.TestCase):
         self.assertAlmostEqual(result.dt_s, 1.0)
         self.assertAlmostEqual(result.mean_speed_m_s, 4.0)
         self.assertAlmostEqual(result.mean_yaw_rate_rad_s, 0.2)
+
+    def test_vio_rejects_camera_motion_that_conflicts_with_wheels(self) -> None:
+        config = load_config(Path("config/default.json"))
+        visual = FeatureFactor(
+            np.zeros((25, 3)),
+            np.zeros((25, 2)),
+            np.array((4.0, 0.0, 0.0)),
+            0.0,
+            1.0,
+        )
+        wheel = WheelPreintegration(0.2, 5.0, 0.0)
+        self.assertFalse(_visual_consistent_with_wheels(visual, wheel, config))
 
     def test_wheel_speed_uses_calibration_and_actual_dt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
