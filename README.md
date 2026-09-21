@@ -5,7 +5,7 @@
 
 - `base`: planar INS на IMU та колісній кінематиці;
 - `visual`: baseline з relative stereo VO corrections;
-- `vio`: feature-level stereo VIO без коліс.
+- `vio`: IMU + колеса + feature-level stereo VIO.
 
 VRS-GPS не входить в estimator і використовується лише для оцінки готової
 траєкторії.
@@ -52,7 +52,7 @@ python -m src.main --mode all --validate --reuse-frontends \
 ```
 
 VIO cache складається з `vio_trajectory.csv` і `vio_manifest.json`. Manifest
-містить dataset path, image range та параметри estimator. Несумісний cache
+містить dataset path, image range, IMU/wheel sources та параметри estimator. Несумісний cache
 відхиляється замість тихого використання.
 
 ## Оцінка

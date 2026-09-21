@@ -52,7 +52,7 @@ def _require_inputs(dataset: Path, *, mode: str, validate: bool) -> None:
         dataset / "sensor_data" / "xsens_imu.csv",
         dataset / "calibration" / "Vehicle2IMU.txt",
     ]
-    if mode in ("base", "visual", "all"):
+    if mode in ("base", "visual", "vio", "all"):
         required.extend(
             (
                 dataset / "sensor_data" / "encoder.csv",
@@ -325,7 +325,7 @@ def run(
     _require_inputs(config.general.dataset, mode=mode, validate=validate)
     config.general.output.mkdir(parents=True, exist_ok=True)
     imu = list(read_imu(config.general.dataset))
-    wheels = _load_wheels(config) if mode in ("base", "visual", "all") else []
+    wheels = _load_wheels(config)
     visual: VisualOdometryResult | None = None
     visual_ready = False
     if mode in ("visual", "all"):
@@ -349,7 +349,7 @@ def run(
         vio = (
             read_vio_trajectory(config)
             if reuse_frontends and (config.general.output / "vio_trajectory.csv").exists()
-            else compute_vio_trajectory(config, imu)
+            else compute_vio_trajectory(config, imu, wheels)
         )
         print(
             f"vio estimator: visual_factors={vio.visual_factors}/"

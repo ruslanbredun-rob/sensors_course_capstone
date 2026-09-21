@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src.camera.vio import preintegrate_imu
+from src.camera.vio import preintegrate_imu, preintegrate_wheels
 from src.common.config import load_config
 from src.common.models import (
     EncoderSample,
@@ -102,6 +102,29 @@ class PrototypeTests(unittest.TestCase):
         )
         self.assertEqual([segment.epochs for segment in segments], [2, 2])
 
+    def test_validation_interpolates_low_rate_estimates(self) -> None:
+        states = [
+            Estimate(timestamp_ms * 1_000_000, timestamp_ms / 100.0, 0.0, 0.0, 10.0)
+            for timestamp_ms in (0, 200, 400, 600)
+        ]
+        reference = [
+            PositionReference(
+                timestamp_ms * 1_000_000,
+                timestamp_ms / 100.0,
+                0.0,
+                4,
+            )
+            for timestamp_ms in (100, 300, 500)
+        ]
+        result = evaluate_position(
+            states,
+            reference,
+            valid_fix_state=4,
+            tolerance_ns=50_000_000,
+        )
+        self.assertEqual(result.matched_epochs, 3)
+        self.assertLess(result.rmse_m, 1e-10)
+
     def test_imu_columns_are_gyro_z_and_accel_x(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             sensor_dir = Path(directory) / "sensor_data"
@@ -133,6 +156,22 @@ class PrototypeTests(unittest.TestCase):
         self.assertAlmostEqual(result.dt_s, 1.0)
         self.assertAlmostEqual(result.mean_gyro_rad_s, 0.15)
         self.assertAlmostEqual(result.mean_accel_m_s2, 2.0)
+
+    def test_wheel_preintegration_uses_camera_interval_boundaries(self) -> None:
+        samples = [
+            WheelMeasurement(0, 2.0, 0.1),
+            WheelMeasurement(1_000_000_000, 4.0, 0.2),
+            WheelMeasurement(2_000_000_000, 6.0, 0.3),
+        ]
+        result = preintegrate_wheels(
+            samples,
+            [sample.timestamp_ns for sample in samples],
+            500_000_000,
+            1_500_000_000,
+        )
+        self.assertAlmostEqual(result.dt_s, 1.0)
+        self.assertAlmostEqual(result.mean_speed_m_s, 4.0)
+        self.assertAlmostEqual(result.mean_yaw_rate_rad_s, 0.2)
 
     def test_wheel_speed_uses_calibration_and_actual_dt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

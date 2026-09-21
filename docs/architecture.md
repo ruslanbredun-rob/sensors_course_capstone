@@ -6,11 +6,11 @@
 |---|---|---|
 | `base` | Planar EKF | IMU + wheel encoders |
 | `visual` | Planar EKF з pose-clone update | IMU + wheels + stereo VO |
-| `vio` | Sliding-window nonlinear optimization | stereo features + IMU |
+| `vio` | Sliding-window nonlinear optimization | IMU + wheels + stereo features |
 | `all` | Запускає три конфігурації для порівняння | усі перелічені вище |
 
-VIO є окремою траєкторією. Вона не надходить назад у baseline EKF, тому одна й
-та сама IMU інформація не враховується двічі.
+VIO є окремою траєкторією. IMU та колеса утворюють motion backbone, а camera
+reprojection додається у спільну оптимізацію.
 
 ## Data flow
 
@@ -24,8 +24,10 @@ flowchart LR
 
     CAM --> FEAT[Rectify, ORB, stereo depth]
     IMU --> PRE[IMU preintegration]
+    ENC --> WPRE[Wheel preintegration]
     FEAT --> WIN[Sliding-window VIO]
     PRE --> WIN
+    WPRE --> WIN
 
     EKF --> EVAL[VRS-only evaluation]
     WIN --> EVAL
@@ -55,19 +57,21 @@ prediction, wheel speed і differential yaw rate виконують correction. 
 ## VIO
 
 VIO state кожного camera epoch містить planar pose і forward speed. Спільні
-змінні вікна містять gyro та accelerometer biases. Stereo disparity створює 3D
+змінні вікна містять gyro та accelerometer biases. Wheel factors обмежують
+forward speed і yaw increment. Stereo disparity створює 3D
 landmarks у попередньому camera frame; ORB tracks задають 2D observations у
 наступному frame. Оптимізатор одночасно мінімізує reprojection та IMU residuals.
 
-Початкова pose дорівнює `(0,0,0)`. Початкова швидкість ініціалізується першою
-валідною metric stereo translation. Після заповнення вікна найстаріша pose
+Початкова pose дорівнює `(0,0,0)`. Початкова швидкість ініціалізується wheel
+preintegration. Після заповнення вікна найстаріша pose
 фіксує локальний gauge, а estimator продовжує fixed-lag оптимізацію.
 
 ## Оцінка
 
-Тільки `fix_state=4` використовується як reference. Global ATE застосовує один
-rigid SE(2) alignment без scale. Initial-pose view вирівнює спільну стартову
-точку й напрям. Саме initial-pose графік показує реальний accumulated drift.
+Тільки `fix_state=4` використовується як reference. Для low-rate VIO estimate
+інтерполюється на RTK timestamp, якщо сусідні states розділяє не більше 250 мс.
+Global ATE застосовує один rigid SE(2) alignment без scale. Initial-pose view
+вирівнює спільну стартову точку й напрям.
 
 ## Межі реалізації
 

@@ -167,6 +167,27 @@ def evaluate_position(
         offset_ns = times[nearest] - sample.timestamp_ns
         if abs(offset_ns) <= tolerance_ns:
             pairs.append((sample, states[nearest], offset_ns))
+            continue
+        if not 0 < insertion < len(states):
+            continue
+        previous, following = states[insertion - 1], states[insertion]
+        interval_ns = following.timestamp_ns - previous.timestamp_ns
+        if interval_ns > 5 * tolerance_ns:
+            continue
+        ratio = (sample.timestamp_ns - previous.timestamp_ns) / interval_ns
+        yaw_delta = math.atan2(
+            math.sin(following.yaw_rad - previous.yaw_rad),
+            math.cos(following.yaw_rad - previous.yaw_rad),
+        )
+        interpolated = Estimate(
+            timestamp_ns=sample.timestamp_ns,
+            x_m=previous.x_m + ratio * (following.x_m - previous.x_m),
+            y_m=previous.y_m + ratio * (following.y_m - previous.y_m),
+            yaw_rad=previous.yaw_rad + ratio * yaw_delta,
+            speed_m_s=previous.speed_m_s
+            + ratio * (following.speed_m_s - previous.speed_m_s),
+        )
+        pairs.append((sample, interpolated, 0))
     if len(pairs) < 3:
         raise ValueError(
             f"Only {len(pairs)} valid VRS epochs matched within "

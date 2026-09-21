@@ -19,7 +19,7 @@ from src.camera.visual_odometry import (
     _timestamped_files,
 )
 from src.common.config import RunConfig
-from src.common.models import Estimate, ImuSample
+from src.common.models import Estimate, ImuSample, WheelMeasurement
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,13 @@ class ImuPreintegration:
     dt_s: float
     mean_gyro_rad_s: float
     mean_accel_m_s2: float
+
+
+@dataclass(frozen=True)
+class WheelPreintegration:
+    dt_s: float
+    mean_speed_m_s: float
+    mean_yaw_rate_rad_s: float
 
 
 @dataclass(frozen=True)
@@ -58,6 +65,7 @@ class _Node:
 @dataclass(frozen=True)
 class _Edge:
     imu: ImuPreintegration
+    wheel: WheelPreintegration
     visual: FeatureFactor | None
 
 
@@ -94,6 +102,50 @@ def preintegrate_imu(
     interval_s = (end_timestamp_ns - start_timestamp_ns) * 1e-9
     return ImuPreintegration(
         interval_s, gyro_integral / interval_s, accel_integral / interval_s
+    )
+
+
+def preintegrate_wheels(
+    samples: list[WheelMeasurement],
+    timestamps: list[int],
+    start_timestamp_ns: int,
+    end_timestamp_ns: int,
+) -> WheelPreintegration:
+    """Average wheel speed and yaw rate over one camera interval."""
+    if end_timestamp_ns <= start_timestamp_ns:
+        raise ValueError("Wheel preintegration interval must be positive")
+    if not samples or len(samples) != len(timestamps):
+        raise ValueError("Wheel samples and timestamps must be non-empty and aligned")
+    if start_timestamp_ns < timestamps[0] or end_timestamp_ns > timestamps[-1]:
+        raise ValueError("Camera interval lies outside the wheel stream")
+    inside = [
+        index
+        for index in range(
+            bisect_right(timestamps, start_timestamp_ns),
+            bisect_right(timestamps, end_timestamp_ns),
+        )
+    ]
+    integration_times = np.array(
+        [start_timestamp_ns, *(timestamps[index] for index in inside), end_timestamp_ns],
+        dtype=np.int64,
+    )
+    source_times = np.asarray(timestamps, dtype=np.int64)
+    speed = np.interp(
+        integration_times,
+        source_times,
+        [sample.speed_m_s for sample in samples],
+    )
+    yaw_rate = np.interp(
+        integration_times,
+        source_times,
+        [sample.yaw_rate_rad_s for sample in samples],
+    )
+    relative_time_s = (integration_times - start_timestamp_ns) * 1e-9
+    interval_s = (end_timestamp_ns - start_timestamp_ns) * 1e-9
+    return WheelPreintegration(
+        interval_s,
+        float(np.trapezoid(speed, relative_time_s) / interval_s),
+        float(np.trapezoid(yaw_rate, relative_time_s) / interval_s),
     )
 
 
@@ -206,22 +258,16 @@ class FeatureWindowVio:
         self,
         timestamp_ns: int,
         imu: ImuPreintegration,
+        wheel: WheelPreintegration,
         visual: FeatureFactor | None,
     ) -> Estimate:
         previous = self.nodes[-1]
-        accel = imu.mean_accel_m_s2 - self.accel_bias_m_s2
-        dyaw_imu = (imu.mean_gyro_rad_s - self.gyro_bias_rad_s) * imu.dt_s
-        if visual is not None:
-            dx, dy = visual.initial_delta_vehicle_m[:2]
-            dyaw = visual.initial_dyaw_rad
-            speed = dx / imu.dt_s
-            if len(self.nodes) == 1 and not self.edges:
-                previous.speed_m_s = speed
-        else:
-            dx = previous.speed_m_s * imu.dt_s + 0.5 * accel * imu.dt_s**2
-            dy = 0.0
-            dyaw = dyaw_imu
-            speed = previous.speed_m_s + accel * imu.dt_s
+        dx = wheel.mean_speed_m_s * wheel.dt_s
+        dy = 0.0
+        dyaw = wheel.mean_yaw_rate_rad_s * wheel.dt_s
+        speed = wheel.mean_speed_m_s
+        if len(self.nodes) == 1 and not self.edges:
+            previous.speed_m_s = speed
         cosine, sine = math.cos(previous.yaw_rad), math.sin(previous.yaw_rad)
         self.nodes.append(
             _Node(
@@ -232,7 +278,7 @@ class FeatureWindowVio:
                 speed,
             )
         )
-        self.edges.append(_Edge(imu, visual))
+        self.edges.append(_Edge(imu, wheel, visual))
         if len(self.nodes) > self.config.vio.window_size:
             self.nodes.pop(0)
             self.edges.pop(0)
@@ -290,6 +336,17 @@ class FeatureWindowVio:
                         (second[1] - first[1] - expected_xy[1]) / vio.imu_position_std_m,
                         _wrap(yaw_delta - expected_yaw) / (vio.imu_gyro_std_rad_s * dt_s),
                         (second[3] - first[3] - accel * dt_s) / (vio.imu_accel_std_m_s2 * dt_s),
+                    )
+                )
+                wheel = edge.wheel
+                result.extend(
+                    (
+                        (0.5 * (first[3] + second[3]) - wheel.mean_speed_m_s)
+                        / self.config.wheel.speed_std_m_s,
+                        _wrap(
+                            yaw_delta - wheel.mean_yaw_rate_rad_s * wheel.dt_s
+                        )
+                        / (self.config.wheel.yaw_rate_std_rad_s * wheel.dt_s),
                     )
                 )
                 if edge.visual is None:
@@ -360,12 +417,14 @@ def _cache_signature(config: RunConfig, timestamps: list[int]) -> dict:
     calibration = config.general.dataset / "calibration"
     sources = [
         config.general.dataset / "sensor_data" / "xsens_imu.csv",
+        config.general.dataset / "sensor_data" / "encoder.csv",
+        calibration / "EncoderParameter.txt",
         calibration / "left.yaml",
         calibration / "right.yaml",
         calibration / "Vehicle2Stereo.txt",
     ]
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "dataset": str(config.general.dataset.resolve()),
         "frame_step": config.visual_odometry.frame_step,
         "image_scale": config.visual_odometry.image_scale,
@@ -434,20 +493,29 @@ def read_vio_trajectory(config: RunConfig) -> VioTrajectoryResult:
     )
 
 
-def compute_vio_trajectory(config: RunConfig, imu: list[ImuSample]) -> VioTrajectoryResult:
+def compute_vio_trajectory(
+    config: RunConfig,
+    imu: list[ImuSample],
+    wheels: list[WheelMeasurement],
+) -> VioTrajectoryResult:
     left, right, all_timestamps = _stereo_timestamps(config)
     if not imu:
         raise ValueError("VIO requires a non-empty IMU stream")
+    if not wheels:
+        raise ValueError("VIO requires a non-empty wheel stream")
     timestamps = [
         timestamp
         for timestamp in all_timestamps
-        if imu[0].timestamp_ns <= timestamp <= imu[-1].timestamp_ns
+        if max(imu[0].timestamp_ns, wheels[0].timestamp_ns)
+        <= timestamp
+        <= min(imu[-1].timestamp_ns, wheels[-1].timestamp_ns)
     ]
     if len(timestamps) < 2:
         raise ValueError("Fewer than two stereo pairs overlap the IMU stream")
     frontend = _StereoFrontend(config)
     estimator = FeatureWindowVio(config, frontend)
     imu_timestamps = [sample.timestamp_ns for sample in imu]
+    wheel_timestamps = [sample.timestamp_ns for sample in wheels]
     previous = frontend.read_frame(timestamps[0], left[timestamps[0]], right[timestamps[0]])
     states = [estimator.initialize(previous.timestamp_ns)]
     visual_factors = rejected = 0
@@ -456,13 +524,18 @@ def compute_vio_trajectory(config: RunConfig, imu: list[ImuSample]) -> VioTrajec
         imu_factor = preintegrate_imu(
             imu, imu_timestamps, previous.timestamp_ns, timestamp
         )
+        wheel_factor = preintegrate_wheels(
+            wheels, wheel_timestamps, previous.timestamp_ns, timestamp
+        )
         try:
             visual_factor = _feature_factor(frontend, previous, current, config)
         except (cv2.error, np.linalg.LinAlgError):
             visual_factor = None
         visual_factors += int(visual_factor is not None)
         rejected += int(visual_factor is None)
-        states.append(estimator.add(timestamp, imu_factor, visual_factor))
+        states.append(
+            estimator.add(timestamp, imu_factor, wheel_factor, visual_factor)
+        )
         previous = current
     _write_states(config.general.output / "vio_trajectory.csv", states)
     with (config.general.output / "vio_manifest.json").open("w", encoding="utf-8") as stream:
