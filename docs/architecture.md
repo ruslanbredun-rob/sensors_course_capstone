@@ -87,8 +87,11 @@ measurement і не перетворює VO/LO на абсолютну пози�
 
 Raw NIS вище soft threshold збільшує measurement covariance. Update повністю
 відкидається, якщо потрібний covariance scale перевищує 100. Frontend входить у
-fusion лише за достатнього coverage. У `full` режимі LiDAR має пріоритет, а VO
-використовується у прогалинах, бо ці measurements корельовані.
+fusion лише за достатнього coverage. LiDAR додатково потребує не менше 5% часу
+з `|wheel yaw rate| >= 0.08 rad/s`; це non-GPS motion gate, який не дозволяє
+накопичувати слабко спостережуваний yaw bias на майже прямому маршруті. У `full`
+режимі LiDAR має пріоритет, а VO використовується у прогалинах, бо ці
+measurements корельовані.
 
 ## Frontends
 
@@ -96,10 +99,11 @@ Stereo VO використовує rectification, ORB matching, RANSAC essential
 stereo disparity scale та camera-to-vehicle transform. Простий frontend має
 нестабільний scale і sequence bias.
 
-LiDAR frontend переводить left VLP-16 cloud у vehicle frame, фільтрує range і
-height, виконує voxel downsampling та scan-to-scan planar ICP. Wheel motion
-використовується як initial guess і sanity gate. Це стабільніше і простіше за
-коротку рухому local map, але все одно накопичує drift і не є LIO.
+LiDAR frontend запускається після sequence-level motion gate, переводить left
+VLP-16 cloud у vehicle frame, фільтрує range і height, виконує voxel
+downsampling та scan-to-scan planar ICP. Wheel motion використовується як
+initial guess і sanity gate. Це стабільніше і простіше за коротку рухому local
+map, але все одно накопичує drift і не є LIO.
 
 ## Evaluation та графіки
 

@@ -10,7 +10,7 @@ fusion і використовується лише для незалежної 
   wheel yaw rate;
 - **Baseline + stereo VO:** metric body-frame `dx, dy, dyaw` від stereo camera;
 - **Baseline + LiDAR:** scan-to-scan planar ICP з left VLP-16;
-- **Full:** LiDAR corrections і stereo VO у прогалинах LiDAR.
+- **Selected fusion:** health-gated LiDAR corrections і stereo VO у прогалинах.
 
 EKF state: `[x, y, yaw, speed, gyro_z_bias, accel_x_bias]`. VO/LO передають
 body-frame relative pose. EKF порівнює її зі збереженою pose clone та збільшує
@@ -75,18 +75,18 @@ metric окремо фіксує старт і початковий напрям
 без глобальної компенсації yaw. RTK metrics також розбиваються на безперервні
 segments, якщо між valid fixes є прогалина понад 1.5 с.
 
-| Sequence | IMU + wheel | +VO | +LiDAR | Full |
+| Sequence | IMU + wheel | +VO | +LiDAR | Selected fusion |
 |---|---:|---:|---:|---:|
-| `urban35`, global RMSE | **4.153 м** | **4.153 м** | 127.396 м | 127.396 м |
+| `urban35`, global RMSE | **4.153 м** | **4.153 м** | **4.153 м** | **4.153 м** |
 | `urban33`, global RMSE | 83.828 м | 87.403 м | 61.992 м | **61.961 м** |
 | `urban39`, global RMSE | 188.456 м | 197.715 м | 91.581 м | **91.522 м** |
 
-`urban35` є коротким майже прямим маршрутом, де baseline вже добре відтворює
-форму. Global alignment може приховувати accumulated yaw error, тому його треба
-читати разом з initial-pose plots. Прості VO/LO frontends не дають стабільного
-покращення на всіх sequences: stereo VO має scale/bias, а scan-to-scan LiDAR
-накопичує drift. Цей результат обґрунтовує перехід до VIO/LIO/LVIO або loop
-closure. Повні метрики, RTK coverage і обмеження наведені у
+На `urban35` LiDAR вимикається до запуску frontend, бо turning fraction 1.3% є
+нижчою за health threshold 5%. На `urban33/39` він активний. Global alignment
+може приховувати accumulated yaw error, тому його треба читати разом з
+initial-pose plots. Stereo VO має scale/bias, а scan-to-scan LiDAR накопичує
+drift; для вищої точності потрібні VIO/LIO/LVIO або loop closure. Повні метрики,
+RTK coverage і обмеження наведені у
 [results/conclusions.md](results/conclusions.md). Архітектура описана в
 [docs/architecture.md](docs/architecture.md).
 

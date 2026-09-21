@@ -66,8 +66,8 @@ timestamp sync + loaders
 VRS-GPS (valid RTK fix) + FOG --> evaluation only
 ```
 
-Ненадійні wheel, visual та LiDAR updates проходять перевірку якості та NIS gating
-перед корекцією EKF.
+Ненадійні wheel, visual та LiDAR updates проходять перевірку якості та NIS
+gating. LiDAR додатково активується лише за достатньої частки поворотного руху.
 
 ## 5. Data source
 
