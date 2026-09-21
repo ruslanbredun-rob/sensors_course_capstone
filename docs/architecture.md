@@ -2,7 +2,7 @@
 
 ## Призначення
 
-Pipeline оцінює planar state автомобіля на `urban35` та `urban39` без GNSS
+Pipeline оцінює planar state автомобіля на `urban33`, `urban35` та `urban39` без GNSS
 measurement у фільтрі. EKF state:
 
 ```text
@@ -148,12 +148,14 @@ CSV містить дві оцінки:
 
 1. **Global SE(2) ATE** — Kabsch translation і yaw по всіх matched points, без
    scale fit. Це primary metric форми траєкторії.
-2. **Start anchored error** — використовується той самий fitted yaw, але
-   translation фіксує перші точки разом. Саме його показують trajectory та
-   error-over-time plots, тому старт estimate і reference збігається.
+2. **Initial-pose error** — translation фіксує перші точки разом, а yaw
+   оцінюється за першим надійним відрізком руху близько 20 м. Саме його
+   показують trajectory та error-over-time plots, тому стартова позиція і
+   напрям estimate та reference збігаються.
 
-Start anchored plot є offline візуалізацією: fitted yaw використовує всю
-reference trajectory. VRS та alignment ніколи не повертаються у EKF.
+Initial-pose plot є offline візуалізацією. Global SE(2) fit використовує всю
+reference trajectory лише для primary ATE. VRS та alignment ніколи не
+повертаються у EKF.
 
 ## Перевірені систематичні фактори
 

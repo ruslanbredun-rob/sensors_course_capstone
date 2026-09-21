@@ -1,6 +1,6 @@
 # Dataset installation
 
-This project uses sequences `urban35` and `urban39` from the Complex Urban Dataset:
+This project uses sequences `urban33`, `urban35`, and `urban39` from the Complex Urban Dataset:
 
 https://sites.google.com/view/complex-urban-dataset
 
@@ -33,4 +33,4 @@ Known sequence details:
 - the first right stereo frame corresponding to `1544686261456267672` is absent;
 - the first expected right VLP frame corresponding to `1544686261584782000` is absent;
 - VRS-GPS epochs without a valid RTK fix are excluded from primary metrics.
-- `urban39/archives/` may retain the downloaded tar files; runtime does not read them.
+- `<sequence>/archives/` may retain downloaded tar files; runtime does not read them.

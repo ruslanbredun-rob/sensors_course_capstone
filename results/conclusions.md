@@ -5,32 +5,51 @@
 VRS-GPS не надходить у EKF. Для оцінки беруться тільки `fix_state=4`, VRS
 epochs зіставляються зі state за timestamp у межах 50 мс.
 
-Primary metric — global rigid SE(2) ATE без scale fit. Окремо рахується start
-anchored error: yaw береться з того самого SE(2) fit, але translation суміщає
-перші точки. На trajectory plots використано start anchored coordinates, тому
-початок estimate та reference збігається.
+Primary metric — global rigid SE(2) ATE без scale fit. Окремо рахується
+initial-pose error: translation суміщає перші точки, а yaw оцінюється за першим
+надійним відрізком руху близько 20 м. На trajectory plots початкова позиція і
+напрям estimate та reference збігаються.
 
-| Характеристика | `urban35` | `urban39` |
-|---|---:|---:|
-| Тривалість | 173.9 с | 1866.7 с |
-| Encoder samples | 17 388 | 186 675 |
-| IMU samples | 17 388 | 186 682 |
-| Валідні RTK epochs | 169 | 314 |
-| Polyline по valid RTK epochs | 3215 м | 5577 м |
-| Повна довжина sequence | ≈3.2 км | ≈11.1 км |
+| Характеристика | `urban33` | `urban35` | `urban39` |
+|---|---:|---:|---:|
+| Тривалість | 1284.4 с | 173.9 с | 1866.8 с |
+| Encoder samples | 128 436 | 17 388 | 186 675 |
+| IMU samples | 128 442 | 17 388 | 186 682 |
+| Валідні RTK epochs | 908 | 169 | 314 |
+| Polyline по valid RTK epochs | 7162 м | 3215 м | 5577 м |
+| Wheel distance | ≈7.4 км | ≈3.2 км | ≈10.7 км |
 
-`urban35` — короткий майже прямий маршрут. `urban39` триває понад 31 хвилину
-і містить багато поворотів та петель.
+`urban35` — короткий майже прямий маршрут. `urban33` та `urban39` містять
+багато поворотів і краще показують вплив yaw drift та odometry corrections.
+
+## Результати `urban33`
+
+| Конфігурація | Global RMSE, м | Median, м | P95, м | Initial-pose RMSE, м |
+|---|---:|---:|---:|---:|
+| E1 IMU + wheel | 83.828 | 41.393 | 148.782 | 119.094 |
+| E2 kinematics + slip | 84.267 | 41.894 | 150.274 | 119.373 |
+| E2 + stereo VO | 87.574 | 40.944 | 167.555 | 160.326 |
+| E2 + LiDAR | 47.475 | **26.631** | 87.441 | **110.466** |
+| E2 + stereo VO + LiDAR | **45.763** | 28.029 | **84.360** | 118.525 |
+
+![Траєкторії urban33](urban33/screenshots/trajectory_comparison.png)
+
+Stereo frontend прийняв 3117/6410 пар (48.6%), LiDAR — 12210/12732 (95.9%).
+Full mode знижує global RMSE на 45.4%. За initial-pose alignment LiDAR-only
+має найменший RMSE, а full mode майже дорівнює baseline. Водночас кінцева
+помилка зменшується з 404.1 м для baseline до 31.5 м для LiDAR і 30.4 м для
+full. Це означає, що LO добре стримує довготривалий yaw drift, але локальна
+форма середньої частини маршруту ще має систематичну похибку.
 
 ## Результати `urban35`
 
-| Конфігурація | Global RMSE, м | Median, м | P95, м | Start RMSE, м |
+| Конфігурація | Global RMSE, м | Median, м | P95, м | Initial-pose RMSE, м |
 |---|---:|---:|---:|---:|
-| E1 IMU + wheel | 4.153 | 3.104 | 7.024 | 7.731 |
-| E2 kinematics + slip | **3.788** | 3.259 | 5.958 | **7.119** |
-| E2 + stereo VO | 3.788 | 3.259 | 5.958 | 7.119 |
-| E2 + LiDAR | 3.788 | 3.259 | 5.958 | 7.119 |
-| E2 + stereo VO + LiDAR | 3.788 | 3.259 | 5.958 | 7.119 |
+| E1 IMU + wheel | 4.153 | 3.104 | 7.024 | 52.034 |
+| E2 kinematics + slip | **3.788** | 3.259 | 5.958 | **51.433** |
+| E2 + stereo VO | 3.788 | 3.259 | 5.958 | 51.433 |
+| E2 + LiDAR | 3.788 | 3.259 | 5.958 | 51.433 |
+| E2 + stereo VO + LiDAR | 3.788 | 3.259 | 5.958 | 51.433 |
 
 ![Траєкторії urban35](urban35/screenshots/trajectory_comparison.png)
 
@@ -42,13 +61,13 @@ E2 знижує global RMSE на 8.8%. Stereo frontend прийняв 184/868 п
 
 ## Результати `urban39`
 
-| Конфігурація | Global RMSE, м | Median, м | P95, м | Start RMSE, м |
+| Конфігурація | Global RMSE, м | Median, м | P95, м | Initial-pose RMSE, м |
 |---|---:|---:|---:|---:|
-| E1 IMU + wheel | 188.456 | 108.539 | 348.793 | 397.011 |
-| E2 kinematics + slip | 188.471 | 108.484 | 348.879 | 397.094 |
-| E2 + stereo VO | 197.477 | 110.616 | 367.559 | 417.832 |
-| E2 + LiDAR | 90.789 | 57.316 | 168.823 | **168.629** |
-| E2 + stereo VO + LiDAR | **90.690** | **57.029** | **168.689** | 168.668 |
+| E1 IMU + wheel | 188.456 | 108.539 | 348.793 | 397.401 |
+| E2 kinematics + slip | 188.471 | 108.484 | 348.879 | 397.457 |
+| E2 + stereo VO | 197.477 | 110.616 | 367.559 | 412.119 |
+| E2 + LiDAR | 90.789 | 57.316 | 168.823 | **247.936** |
+| E2 + stereo VO + LiDAR | **90.690** | **57.029** | **168.689** | 249.365 |
 
 ![Траєкторії urban39](urban39/screenshots/trajectory_comparison.png)
 
@@ -82,7 +101,7 @@ scatter і систематичний bias. Adaptive NIS обмежує окре
    cross-covariance. Relative pose innovation коригує `x,y,yaw`.
 8. NIS вище soft threshold збільшує measurement covariance. Лише outlier, який
    потребує scale понад 100, повністю відкидається.
-9. Після estimator run VRS використовується для global та start anchored
+9. Після estimator run VRS використовується для global та initial-pose
    evaluation. Він не впливає на state.
 
 ## Перевірка причин Urban39 error
@@ -125,15 +144,22 @@ Adaptive NIS збільшує недовіру до слабкого measurement
 його. На фінальному Urban39 LiDAR run covariance було збільшено для 398 із
 18022 increments; hard rejection не знадобився.
 
-## Чому перший графік не збігався на старті
+## Вирівнювання старту та різниця метрик
 
 Попередній plot показував global Kabsch alignment. Він мінімізує сумарну ATE і
 може змістити першу точку; на старому Urban39 графіку цей offset становив
 приблизно 349 м. Це була властивість візуалізації, а не timestamp shift.
 
-Тепер trajectory plots використовують start anchored translation, тому старт
-збігається. Primary global ATE збережено окремо, щоб не змінювати стандартну
-метрику.
+Перші приблизно 6 секунд `urban39` стоїть, тому напрям за першими двома RTK
+точками визначається шумом. Тепер trajectory plots суміщають стартову позицію,
+чекають на перший надійний відрізок близько 20 м і за ним суміщають початковий
+yaw.
+
+Initial-pose RMSE вищий за global ATE, бо global Kabsch fit підбирає кут і зсув
+за всією траєкторією та мінімізує середню помилку. Initial-pose alignment фіксує
+напрям на старті, після чого accumulated yaw drift уже не компенсується
+глобальним поворотом. Тому цей графік краще показує navigation drift, а global
+ATE лишається primary метрикою форми траєкторії.
 
 ## Відмінність від VIO та LIO
 
@@ -146,7 +172,7 @@ Adaptive NIS збільшує недовіру до слабкого measurement
   residuals відносно local map разом з inertial state.
 
 У реалізації немає IMU deskew, scan-to-map, loop closure або joint nonlinear
-optimization. Тому 91 м на 11.1 км є помітним покращенням прототипу, але не
+optimization. Тому 91 м на 10.7 км є помітним покращенням прототипу, але не
 рівнем повноцінного LIO.
 
 ## Наступні покращення

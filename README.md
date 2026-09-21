@@ -1,7 +1,7 @@
 # GPS-denied vehicle localization
 
 Курсовий проєкт для ДЗ 18–19: planar localization автомобіля на Complex Urban
-Dataset, sequences `urban35` та `urban39`. VRS-GPS не входить у fusion і
+Dataset, sequences `urban33`, `urban35` та `urban39`. VRS-GPS не входить у fusion і
 використовується лише для незалежної оцінки готової траєкторії.
 
 ## Реалізовані конфігурації
@@ -19,7 +19,7 @@ pose clone та її covariance, формує innovation по `x, y, yaw` і а�
 
 ## Дані
 
-Завантажте `urban35` та `urban39` з
+Завантажте `urban33`, `urban35` та `urban39` з
 [Complex Urban Dataset](https://sites.google.com/view/complex-urban-dataset) і
 розпакуйте в `data/complex_urban/<sequence>/`. Сирі дані не входять у Git.
 Структура каталогів описана в [data/README.md](data/README.md).
@@ -91,6 +91,7 @@ Primary metric — 2D ATE після rigid SE(2) alignment без scale fit.
 
 | Sequence | E1 IMU+wheel | E2 | E2+VO | E2+LiDAR | Full |
 |---|---:|---:|---:|---:|---:|
+| `urban33`, RMSE м | 83.828 | 84.267 | 87.574 | 47.475 | **45.763** |
 | `urban35`, RMSE м | 4.153 | **3.788** | 3.788 | 3.788 | 3.788 |
 | `urban39`, RMSE м | 188.456 | 188.471 | 197.477 | 90.789 | **90.690** |
 
@@ -99,9 +100,10 @@ Primary metric — 2D ATE після rigid SE(2) alignment без scale fit.
 continuous relative-pose fusion зменшує RMSE на 51.9%. Stereo VO coverage
 44.0%, але його scale/bias у цій простій реалізації погіршує окремий visual run.
 
-Графіки trajectory comparison є start anchored, тому перші точки оцінки та
-VRS збігаються. Числові таблиці містять і standard global ATE, і start anchored
-error. Деталі та обмеження: [results/conclusions.md](results/conclusions.md).
+Графіки trajectory comparison вирівняні за початковою pose: перші точки
+збігаються, а yaw визначається за першим надійним відрізком руху близько 20 м.
+Числові таблиці містять standard global ATE та initial-pose error. Деталі та
+обмеження: [results/conclusions.md](results/conclusions.md).
 Архітектура: [docs/architecture.md](docs/architecture.md).
 
 Pipeline створює тільки числові CSV і PNG:
