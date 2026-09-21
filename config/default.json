@@ -31,33 +31,21 @@
     "min_fusion_coverage": 0.3
   },
   "vio": {
-    "window_size": 8,
-    "visual_speed_std_m_s": 1.5,
-    "visual_yaw_std_rad": 0.04,
+    "window_size": 5,
+    "min_tracks": 25,
+    "max_tracks": 60,
+    "reprojection_std_px": 1.5,
+    "imu_position_std_m": 0.2,
     "imu_accel_std_m_s2": 0.8,
     "imu_gyro_std_rad_s": 0.03,
     "gyro_bias_prior_std_rad_s": 0.03,
     "accel_bias_prior_std_m_s2": 0.5,
-    "max_scale_correction": 2.0,
-    "min_fusion_coverage": 0.3
-  },
-  "lidar_odometry": {
-    "frame_step": 1,
-    "voxel_m": 0.25,
-    "max_correspondence_m": 1.5,
-    "max_rmse_m": 0.8,
-    "min_inlier_ratio": 0.35,
-    "min_quality": 0.5,
-    "initial_speed_m_s": 15.0,
-    "min_fusion_coverage": 0.25,
-    "turning_yaw_rate_rad_s": 0.08,
-    "min_turning_fraction": 0.05
+    "max_iterations": 15
   },
   "fusion": {
     "relative_speed_nis_threshold": 6.635,
     "relative_yaw_nis_threshold": 6.635,
     "relative_pose_nis_threshold": 11.345,
-    "relative_pose_max_covariance_scale": 100.0,
-    "relative_fallback_window_s": 0.3
+    "relative_pose_max_covariance_scale": 100.0
   }
 }

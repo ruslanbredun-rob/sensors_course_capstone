@@ -55,28 +55,15 @@ class VisualOdometryConfig:
 @dataclass(frozen=True)
 class VioConfig:
     window_size: int
-    visual_speed_std_m_s: float
-    visual_yaw_std_rad: float
+    min_tracks: int
+    max_tracks: int
+    reprojection_std_px: float
+    imu_position_std_m: float
     imu_accel_std_m_s2: float
     imu_gyro_std_rad_s: float
     gyro_bias_prior_std_rad_s: float
     accel_bias_prior_std_m_s2: float
-    max_scale_correction: float
-    min_fusion_coverage: float
-
-
-@dataclass(frozen=True)
-class LidarOdometryConfig:
-    frame_step: int
-    voxel_m: float
-    max_correspondence_m: float
-    max_rmse_m: float
-    min_inlier_ratio: float
-    min_quality: float
-    initial_speed_m_s: float
-    min_fusion_coverage: float
-    turning_yaw_rate_rad_s: float
-    min_turning_fraction: float
+    max_iterations: int
 
 
 @dataclass(frozen=True)
@@ -85,7 +72,6 @@ class FusionConfig:
     relative_yaw_nis_threshold: float
     relative_pose_nis_threshold: float
     relative_pose_max_covariance_scale: float
-    relative_fallback_window_s: float
 
 
 @dataclass(frozen=True)
@@ -96,7 +82,6 @@ class RunConfig:
     wheel: WheelConfig
     visual_odometry: VisualOdometryConfig
     vio: VioConfig
-    lidar_odometry: LidarOdometryConfig
     fusion: FusionConfig
 
 
@@ -137,7 +122,6 @@ def load_config(
     wheel = _section(values, "wheel", config_path)
     visual = _section(values, "visual_odometry", config_path)
     vio = _section(values, "vio", config_path)
-    lidar = _section(values, "lidar_odometry", config_path)
     fusion = _section(values, "fusion", config_path)
 
     _positive(general, "general", ("max_dt_s",), config_path)
@@ -187,47 +171,24 @@ def load_config(
         "vio",
         (
             "window_size",
-            "visual_speed_std_m_s",
-            "visual_yaw_std_rad",
+            "min_tracks",
+            "max_tracks",
+            "reprojection_std_px",
+            "imu_position_std_m",
             "imu_accel_std_m_s2",
             "imu_gyro_std_rad_s",
             "gyro_bias_prior_std_rad_s",
             "accel_bias_prior_std_m_s2",
-            "max_scale_correction",
-            "min_fusion_coverage",
+            "max_iterations",
         ),
         config_path,
     )
-    _positive(
-        lidar,
-        "lidar_odometry",
-        (
-            "frame_step",
-            "voxel_m",
-            "max_correspondence_m",
-            "max_rmse_m",
-            "min_inlier_ratio",
-            "min_quality",
-            "initial_speed_m_s",
-            "min_fusion_coverage",
-            "turning_yaw_rate_rad_s",
-            "min_turning_fraction",
-        ),
-        config_path,
-    )
-    for section_name, section in (
-        ("visual_odometry", visual),
-        ("vio", vio),
-        ("lidar_odometry", lidar),
-    ):
-        if float(section["min_fusion_coverage"]) > 1.0:
-            raise ValueError(
-                f"{config_path}: {section_name}.min_fusion_coverage must be <= 1"
-            )
-    if float(lidar["min_turning_fraction"]) > 1.0:
+    if float(visual["min_fusion_coverage"]) > 1.0:
         raise ValueError(
-            f"{config_path}: lidar_odometry.min_turning_fraction must be <= 1"
+            f"{config_path}: visual_odometry.min_fusion_coverage must be <= 1"
         )
+    if int(vio["max_tracks"]) < int(vio["min_tracks"]):
+        raise ValueError(f"{config_path}: vio track bounds are inverted")
     _positive(
         fusion,
         "fusion",
@@ -236,7 +197,6 @@ def load_config(
             "relative_yaw_nis_threshold",
             "relative_pose_nis_threshold",
             "relative_pose_max_covariance_scale",
-            "relative_fallback_window_s",
         ),
         config_path,
     )
@@ -279,26 +239,15 @@ def load_config(
         ),
         vio=VioConfig(
             window_size=int(vio["window_size"]),
-            visual_speed_std_m_s=float(vio["visual_speed_std_m_s"]),
-            visual_yaw_std_rad=float(vio["visual_yaw_std_rad"]),
+            min_tracks=int(vio["min_tracks"]),
+            max_tracks=int(vio["max_tracks"]),
+            reprojection_std_px=float(vio["reprojection_std_px"]),
+            imu_position_std_m=float(vio["imu_position_std_m"]),
             imu_accel_std_m_s2=float(vio["imu_accel_std_m_s2"]),
             imu_gyro_std_rad_s=float(vio["imu_gyro_std_rad_s"]),
             gyro_bias_prior_std_rad_s=float(vio["gyro_bias_prior_std_rad_s"]),
             accel_bias_prior_std_m_s2=float(vio["accel_bias_prior_std_m_s2"]),
-            max_scale_correction=float(vio["max_scale_correction"]),
-            min_fusion_coverage=float(vio["min_fusion_coverage"]),
-        ),
-        lidar_odometry=LidarOdometryConfig(
-            frame_step=int(lidar["frame_step"]),
-            voxel_m=float(lidar["voxel_m"]),
-            max_correspondence_m=float(lidar["max_correspondence_m"]),
-            max_rmse_m=float(lidar["max_rmse_m"]),
-            min_inlier_ratio=float(lidar["min_inlier_ratio"]),
-            min_quality=float(lidar["min_quality"]),
-            initial_speed_m_s=float(lidar["initial_speed_m_s"]),
-            min_fusion_coverage=float(lidar["min_fusion_coverage"]),
-            turning_yaw_rate_rad_s=float(lidar["turning_yaw_rate_rad_s"]),
-            min_turning_fraction=float(lidar["min_turning_fraction"]),
+            max_iterations=int(vio["max_iterations"]),
         ),
         fusion=FusionConfig(
             relative_speed_nis_threshold=float(fusion["relative_speed_nis_threshold"]),
@@ -307,6 +256,5 @@ def load_config(
             relative_pose_max_covariance_scale=float(
                 fusion["relative_pose_max_covariance_scale"]
             ),
-            relative_fallback_window_s=float(fusion["relative_fallback_window_s"]),
         ),
     )

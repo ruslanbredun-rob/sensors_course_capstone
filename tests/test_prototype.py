@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src.camera.vio import ImuPreintegration, SlidingWindowVio, preintegrate_imu
+from src.camera.vio import preintegrate_imu
 from src.common.config import load_config
 from src.common.models import (
     EncoderSample,
@@ -24,9 +24,7 @@ from src.common.synchronization import ordered_events
 from src.dataset.readers import read_vrs_reference
 from src.evaluation.metrics import evaluate_position, evaluate_rtk_segments
 from src.fusion.ekf import VehicleEKF
-from src.fusion.pipeline import wheel_turning_fraction
 from src.imu.reader import read_imu
-from src.lidar.odometry import rigid_fit_2d
 from src.wheel.odometry import wheel_measurements
 
 
@@ -45,8 +43,7 @@ class PrototypeTests(unittest.TestCase):
         self.assertGreater(config.visual_odometry.min_matches, 0)
         self.assertLessEqual(config.visual_odometry.min_fusion_coverage, 1.0)
         self.assertGreater(config.vio.window_size, 1)
-        self.assertGreater(config.lidar_odometry.voxel_m, 0.0)
-        self.assertLessEqual(config.lidar_odometry.min_turning_fraction, 1.0)
+        self.assertGreaterEqual(config.vio.max_tracks, config.vio.min_tracks)
 
     def test_vrs_reader_uses_utm_and_fix_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -137,26 +134,6 @@ class PrototypeTests(unittest.TestCase):
         self.assertAlmostEqual(result.mean_gyro_rad_s, 0.15)
         self.assertAlmostEqual(result.mean_accel_m_s2, 2.0)
 
-    def test_sliding_window_vio_blends_visual_and_inertial_yaw(self) -> None:
-        estimator = SlidingWindowVio(load_config(Path("config/default.json")))
-        fused = estimator.add(
-            RelativeMotion(
-                timestamp_ns=100_000_000,
-                dt_s=0.1,
-                dx_m=1.0,
-                dy_m=0.0,
-                dyaw_rad=0.01,
-                source="visual",
-                translation_std_m=0.5,
-                yaw_std_rad=0.04,
-                quality=1.0,
-            ),
-            ImuPreintegration(0.1, 0.2, 0.0),
-        )
-        self.assertEqual(fused.source, "vio")
-        self.assertGreater(fused.dyaw_rad, 0.01)
-        self.assertLess(fused.dyaw_rad, 0.02)
-
     def test_wheel_speed_uses_calibration_and_actual_dt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "EncoderParameter.txt"
@@ -192,17 +169,6 @@ class PrototypeTests(unittest.TestCase):
             measurement = next(wheel_measurements(samples, path))
             self.assertAlmostEqual(measurement.speed_m_s, -math.pi / 2)
             self.assertEqual(measurement.yaw_rate_rad_s, 0.0)
-
-    def test_turning_fraction_is_duration_weighted(self) -> None:
-        wheels = [
-            WheelMeasurement(0, 1.0, 0.0),
-            WheelMeasurement(1_000_000_000, 1.0, 0.2),
-            WheelMeasurement(3_000_000_000, 1.0, 0.0),
-        ]
-        self.assertAlmostEqual(
-            wheel_turning_fraction(wheels, yaw_rate_threshold_rad_s=0.08),
-            1.0 / 3.0,
-        )
 
     def test_events_are_sorted_and_wheel_update_changes_estimate(self) -> None:
         events = list(
@@ -261,18 +227,6 @@ class PrototypeTests(unittest.TestCase):
         self.assertTrue(filter_.last_relative_pose_accepted)
         self.assertGreater(result.x_m, 0.9)
         self.assertGreater(result.yaw_rad, 0.01)
-
-    def test_lidar_rigid_fit_recovers_planar_transform(self) -> None:
-        source = np.array(((0.0, 0.0), (2.0, 0.0), (0.0, 1.0), (2.0, 2.0)))
-        yaw = 0.2
-        rotation_expected = np.array(
-            ((np.cos(yaw), -np.sin(yaw)), (np.sin(yaw), np.cos(yaw)))
-        )
-        translation_expected = np.array((1.5, -0.4))
-        target = source @ rotation_expected.T + translation_expected
-        rotation, translation = rigid_fit_2d(source, target)
-        np.testing.assert_allclose(rotation, rotation_expected, atol=1e-12)
-        np.testing.assert_allclose(translation, translation_expected, atol=1e-12)
 
 if __name__ == "__main__":
     unittest.main()
