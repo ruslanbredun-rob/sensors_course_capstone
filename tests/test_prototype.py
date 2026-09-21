@@ -24,7 +24,7 @@ from src.dataset.readers import read_vrs_reference
 from src.evaluation.metrics import evaluate_position, evaluate_rtk_segments
 from src.fusion.ekf import VehicleEKF
 from src.imu.reader import read_imu
-from src.lidar.odometry import deskew_points_2d, rigid_fit_2d
+from src.lidar.odometry import rigid_fit_2d
 from src.wheel.odometry import wheel_measurements
 
 
@@ -40,7 +40,6 @@ class PrototypeTests(unittest.TestCase):
         self.assertEqual(config.evaluation.reference_fix_state, 4)
         self.assertGreater(config.imu.gyro_std_rad_s, 0.0)
         self.assertGreater(config.wheel.speed_nis_threshold, 0.0)
-        self.assertGreater(config.adaptation.turn_yaw_rate_threshold_rad_s, 0.0)
         self.assertGreater(config.visual_odometry.min_matches, 0)
         self.assertLessEqual(config.visual_odometry.min_fusion_coverage, 1.0)
         self.assertGreater(config.lidar_odometry.voxel_m, 0.0)
@@ -191,30 +190,6 @@ class PrototypeTests(unittest.TestCase):
         self.assertTrue(filter_.last_relative_yaw_accepted)
         self.assertGreater(filter_.x[4], 0.0)
 
-    def test_wheel_noise_adaptation_separates_motion_regimes(self) -> None:
-        config = load_config(Path("config/default.json"))
-        filter_ = VehicleEKF(config)
-        filter_.predict(ImuSample(0, 0.0, 0.0))
-        filter_.update_wheel(WheelMeasurement(0, 1.0, 0.0), use_yaw_rate=True)
-        self.assertEqual(filter_.motion_regime, "straight")
-        self.assertEqual(
-            filter_.last_yaw_noise_scale,
-            config.adaptation.straight_yaw_scale,
-        )
-        filter_.predict(ImuSample(10_000_000, 0.3, 0.0))
-        filter_.update_wheel(
-            WheelMeasurement(20_000_000, 1.0, 0.3), use_yaw_rate=True
-        )
-        self.assertEqual(filter_.motion_regime, "turning")
-        self.assertEqual(
-            filter_.last_yaw_noise_scale,
-            config.adaptation.turn_yaw_scale,
-        )
-        self.assertEqual(
-            filter_.last_bias_walk_scale,
-            config.adaptation.turn_bias_walk_scale,
-        )
-
     def test_relative_pose_updates_position_and_yaw(self) -> None:
         config = load_config(Path("config/default.json"))
         filter_ = VehicleEKF(config)
@@ -247,18 +222,6 @@ class PrototypeTests(unittest.TestCase):
         rotation, translation = rigid_fit_2d(source, target)
         np.testing.assert_allclose(rotation, rotation_expected, atol=1e-12)
         np.testing.assert_allclose(translation, translation_expected, atol=1e-12)
-
-    def test_lidar_deskew_compensates_scan_time_motion(self) -> None:
-        points = np.array(((10.0, 0.0), (10.0, 0.0)))
-        deskewed = deskew_points_2d(
-            points,
-            speed_m_s=2.0,
-            yaw_rate_rad_s=0.0,
-            scan_period_s=0.1,
-        )
-        np.testing.assert_allclose(deskewed[:, 0], (9.9, 10.0), atol=1e-12)
-        np.testing.assert_allclose(deskewed[:, 1], 0.0, atol=1e-12)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,18 +22,6 @@
     "speed_nis_threshold": 3.841,
     "yaw_nis_threshold": 6.635
   },
-  "adaptation": {
-    "turn_yaw_rate_threshold_rad_s": 0.08,
-    "ema_alpha": 0.001,
-    "min_measurement_scale": 1.0,
-    "max_measurement_scale": 2.0,
-    "straight_speed_scale": 1.0,
-    "straight_yaw_scale": 1.0,
-    "turn_speed_scale": 1.0,
-    "turn_yaw_scale": 1.0,
-    "straight_bias_walk_scale": 1.0,
-    "turn_bias_walk_scale": 1.0
-  },
   "visual_odometry": {
     "frame_step": 2,
     "image_scale": 0.5,
@@ -50,13 +38,7 @@
     "min_inlier_ratio": 0.35,
     "min_quality": 0.5,
     "initial_speed_m_s": 15.0,
-    "min_fusion_coverage": 0.25,
-    "deskew_scan_period_s": 0.1,
-    "local_map_scans": 3,
-    "map_voxel_m": 0.5,
-    "max_iterations": 10,
-    "map_yaw_correction_weight": 0.05,
-    "map_measurement_weight": 0.1
+    "min_fusion_coverage": 0.25
   },
   "fusion": {
     "relative_speed_nis_threshold": 6.635,

@@ -35,22 +35,6 @@ class VehicleEKF:
         self.last_wheel_accepted: bool | None = None
         self.last_wheel_yaw_nis: float | None = None
         self.last_wheel_yaw_accepted: bool | None = None
-        self.motion_regime = "straight"
-        self.last_speed_noise_scale = config.adaptation.straight_speed_scale
-        self.last_yaw_noise_scale = config.adaptation.straight_yaw_scale
-        self.last_bias_walk_scale = config.adaptation.straight_bias_walk_scale
-        self._wheel_noise_scales = {
-            "straight": {
-                "speed": config.adaptation.straight_speed_scale,
-                "yaw": config.adaptation.straight_yaw_scale,
-                "bias": config.adaptation.straight_bias_walk_scale,
-            },
-            "turning": {
-                "speed": config.adaptation.turn_speed_scale,
-                "yaw": config.adaptation.turn_yaw_scale,
-                "bias": config.adaptation.turn_bias_walk_scale,
-            },
-        }
         self.last_relative_source: str | None = None
         self.last_relative_speed_nis: float | None = None
         self.last_relative_speed_accepted: bool | None = None
@@ -115,16 +99,11 @@ class VehicleEKF:
         G[3, 1] = dt
         G[4, 2] = math.sqrt(dt)
         G[5, 3] = math.sqrt(dt)
-        bias_walk_scale = self._wheel_noise_scales[self.motion_regime]["bias"]
         noise = np.array(
             [
                 self.config.imu.gyro_std_rad_s**2,
                 self.config.imu.accel_std_m_s2**2,
-                (
-                    self.config.imu.gyro_bias_walk_rad_s_sqrt_s
-                    * bias_walk_scale
-                )
-                ** 2,
+                self.config.imu.gyro_bias_walk_rad_s_sqrt_s**2,
                 self.config.imu.accel_bias_walk_m_s2_sqrt_s**2,
             ]
         )
@@ -209,34 +188,20 @@ class VehicleEKF:
         *,
         use_yaw_rate: bool = False,
     ) -> Estimate:
-        """Correct speed/bias with online straight/turning noise adaptation."""
+        """Correct speed and gyro bias with fixed calibrated noise."""
         self._advance(measurement.timestamp_ns)
         self.last_wheel_yaw_nis = None
         self.last_wheel_yaw_accepted = None
-        assert self._imu is not None
-        corrected_imu_yaw_rate = self._imu.yaw_rate_rad_s - self.x[4]
-        self.motion_regime = (
-            "turning"
-            if max(abs(measurement.yaw_rate_rad_s), abs(corrected_imu_yaw_rate))
-            >= self.config.adaptation.turn_yaw_rate_threshold_rad_s
-            else "straight"
-        )
-        scales = self._wheel_noise_scales[self.motion_regime]
-        self.last_speed_noise_scale = scales["speed"]
-        self.last_yaw_noise_scale = scales["yaw"]
-        self.last_bias_walk_scale = scales["bias"]
         speed_h = np.zeros(6)
         speed_h[3] = 1.0
         self.last_wheel_nis, self.last_wheel_accepted = self._scalar_update(
             measurement.speed_m_s - self.x[3],
             speed_h,
-            self.config.wheel.speed_std_m_s**2 * self.last_speed_noise_scale,
+            self.config.wheel.speed_std_m_s**2,
             self.config.wheel.speed_nis_threshold,
         )
-        scales["speed"] = self._adapt_noise_scale(
-            self.last_speed_noise_scale, self.last_wheel_nis
-        )
         if use_yaw_rate:
+            assert self._imu is not None
             yaw_h = np.zeros(6)
             yaw_h[4] = -1.0
             predicted_yaw_rate = self._imu.yaw_rate_rad_s - self.x[4]
@@ -246,29 +211,10 @@ class VehicleEKF:
             ) = self._scalar_update(
                 measurement.yaw_rate_rad_s - predicted_yaw_rate,
                 yaw_h,
-                self.config.wheel.yaw_rate_std_rad_s**2
-                * self.last_yaw_noise_scale,
+                self.config.wheel.yaw_rate_std_rad_s**2,
                 self.config.wheel.yaw_nis_threshold,
             )
-            scales["yaw"] = self._adapt_noise_scale(
-                self.last_yaw_noise_scale, self.last_wheel_yaw_nis
-            )
-            scales["bias"] = self._adapt_noise_scale(
-                self.last_bias_walk_scale, self.last_wheel_yaw_nis
-            )
         return self._estimate()
-
-    def _adapt_noise_scale(self, current: float, nis: float) -> float:
-        adaptation = self.config.adaptation
-        target = max(
-            adaptation.min_measurement_scale,
-            min(adaptation.max_measurement_scale, current * max(nis, 0.05)),
-        )
-        updated = (1.0 - adaptation.ema_alpha) * current + adaptation.ema_alpha * target
-        return max(
-            adaptation.min_measurement_scale,
-            min(adaptation.max_measurement_scale, updated),
-        )
 
     def update_relative_motion(self, measurement: RelativeMotion) -> Estimate:
         """Fuse body-forward speed and yaw rate from VO or LiDAR odometry."""

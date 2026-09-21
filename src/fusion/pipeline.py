@@ -164,10 +164,6 @@ def _run_filter(
                 "yaw_rate_nis",
                 "wheel_accepted",
                 "yaw_rate_accepted",
-                "motion_regime",
-                "speed_noise_scale",
-                "yaw_noise_scale",
-                "bias_walk_scale",
             )
         )
         relative_writer.writerow(
@@ -218,10 +214,6 @@ def _run_filter(
                         else f"{estimator.last_wheel_yaw_nis:.6f}",
                         estimator.last_wheel_accepted,
                         estimator.last_wheel_yaw_accepted,
-                        estimator.motion_regime,
-                        f"{estimator.last_speed_noise_scale:.6f}",
-                        f"{estimator.last_yaw_noise_scale:.6f}",
-                        f"{estimator.last_bias_walk_scale:.6f}",
                     )
                 )
             elif isinstance(event, RelativePoseEpoch):
@@ -373,7 +365,7 @@ def run(
         lidar = (
             read_lidar_odometry(config)
             if reuse_frontends
-            else compute_lidar_odometry(config, wheels, imu)
+            else compute_lidar_odometry(config, wheels)
         )
         lidar_ready = _frontend_ready(
             len(lidar.motions),
