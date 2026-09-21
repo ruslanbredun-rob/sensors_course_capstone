@@ -1,4 +1,4 @@
-"""Run the Complex Urban wheel + IMU localization prototype."""
+"""Run the Complex Urban localization experiments."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, help="Override result directory")
     parser.add_argument(
         "--mode",
-        choices=("base", "visual", "vio", "lidar", "full", "all"),
+        choices=("base", "visual", "vio", "all"),
         default="base",
     )
     parser.add_argument(
@@ -36,7 +36,7 @@ def main() -> None:
     parser.add_argument(
         "--reuse-frontends",
         action="store_true",
-        help="Reuse cached VO, VIO and LiDAR odometry from --output",
+        help="Reuse compatible cached VO and VIO results from --output",
     )
     args = parser.parse_args()
     if args.max_events is not None and args.max_events <= 0:

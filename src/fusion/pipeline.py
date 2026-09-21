@@ -12,9 +12,9 @@ from src.camera.visual_odometry import (
     read_visual_odometry,
 )
 from src.camera.vio import (
-    VioOdometryResult,
-    compute_vio_odometry,
-    read_vio_odometry,
+    VioTrajectoryResult,
+    compute_vio_trajectory,
+    read_vio_trajectory,
 )
 from src.common.config import RunConfig
 from src.common.models import (
@@ -30,11 +30,6 @@ from src.evaluation.artifacts import export_validation_artifacts
 from src.evaluation.metrics import PositionEvaluation, evaluate_position
 from src.fusion.ekf import VehicleEKF
 from src.imu.reader import read_imu
-from src.lidar.odometry import (
-    LidarOdometryResult,
-    compute_lidar_odometry,
-    read_lidar_odometry,
-)
 from src.wheel.odometry import (
     wheel_measurements,
 )
@@ -54,11 +49,16 @@ class ExperimentResult:
 
 def _require_inputs(dataset: Path, *, mode: str, validate: bool) -> None:
     required = [
-        dataset / "sensor_data" / "encoder.csv",
         dataset / "sensor_data" / "xsens_imu.csv",
-        dataset / "calibration" / "EncoderParameter.txt",
         dataset / "calibration" / "Vehicle2IMU.txt",
     ]
+    if mode in ("base", "visual", "all"):
+        required.extend(
+            (
+                dataset / "sensor_data" / "encoder.csv",
+                dataset / "calibration" / "EncoderParameter.txt",
+            )
+        )
     if validate:
         required.extend(
             (
@@ -66,7 +66,7 @@ def _require_inputs(dataset: Path, *, mode: str, validate: bool) -> None:
                 dataset / "calibration" / "Vehicle2VRS.txt",
             )
         )
-    if mode in ("visual", "vio", "full", "all"):
+    if mode in ("visual", "vio", "all"):
         required.extend(
             (
                 dataset / "calibration" / "left.yaml",
@@ -76,13 +76,6 @@ def _require_inputs(dataset: Path, *, mode: str, validate: bool) -> None:
                 dataset / "image" / "stereo_right",
             )
         )
-    if mode in ("lidar", "full", "all"):
-        required.extend(
-            (
-                dataset / "calibration" / "Vehicle2LeftVLP.txt",
-                dataset / "sensor_data" / "VLP_left",
-            )
-        )
     missing = [path for path in required if not path.exists()]
     if missing:
         raise FileNotFoundError(
@@ -90,11 +83,11 @@ def _require_inputs(dataset: Path, *, mode: str, validate: bool) -> None:
             + ", ".join(str(path) for path in missing)
             + ". See data/README.md."
         )
-    imu_transform = (dataset / "calibration" / "Vehicle2IMU.txt").read_text(
-        encoding="utf-8"
-    )
-    if "R: 1 0 0 0 1 0 0 0 1" not in imu_transform:
-        raise ValueError("The current planar model requires identity Vehicle2IMU R")
+    imu_transform_path = dataset / "calibration" / "Vehicle2IMU.txt"
+    if imu_transform_path.exists():
+        imu_transform = imu_transform_path.read_text(encoding="utf-8")
+        if "R: 1 0 0 0 1 0 0 0 1" not in imu_transform:
+            raise ValueError("The current planar model requires identity Vehicle2IMU R")
     if validate:
         vrs_transform = (dataset / "calibration" / "Vehicle2VRS.txt").read_text(
             encoding="utf-8"
@@ -150,7 +143,6 @@ def _run_filter(
     states: list[Estimate] = []
     wheel_count = rejected = 0
     relative_count = rejected_relative = relative_available = 0
-    last_lidar_motion_ns = -1
     event_count = 0
     diagnostics_path = config.general.output / f"diagnostics_{name}.csv"
     relative_path = config.general.output / f"diagnostics_relative_{name}.csv"
@@ -229,21 +221,7 @@ def _run_filter(
                 if estimator.timestamp_ns is None or estimator.current_imu is None:
                     continue
                 relative_available += 1
-                if event.source == "lidar":
-                    last_lidar_motion_ns = event.timestamp_ns
-                lidar_recent = (
-                    last_lidar_motion_ns >= 0
-                    and event.timestamp_ns - last_lidar_motion_ns
-                    <= int(config.fusion.relative_fallback_window_s * 1e9)
-                )
-                # VO and LO share much of the same vehicle motion and are not
-                # independent. In the combined mode, prefer the substantially
-                # lower-noise LiDAR increment and use VO only across LO gaps.
-                use_correction = not (
-                    name == "full"
-                    and event.source in ("visual", "vio")
-                    and lidar_recent
-                )
+                use_correction = True
                 if use_correction:
                     estimate = estimator.update_relative_pose(event)
                     accepted = bool(estimator.last_relative_pose_accepted)
@@ -336,24 +314,6 @@ def _frontend_ready(accepted: int, attempted: int, minimum_coverage: float) -> b
     return attempted > 0 and accepted / attempted >= minimum_coverage
 
 
-def wheel_turning_fraction(
-    wheels: list[WheelMeasurement], *, yaw_rate_threshold_rad_s: float
-) -> float:
-    """Return the duration-weighted fraction with informative turning motion."""
-    if len(wheels) < 2:
-        return 0.0
-    total_duration_s = 0.0
-    turning_duration_s = 0.0
-    for previous, current in zip(wheels, wheels[1:]):
-        dt_s = (current.timestamp_ns - previous.timestamp_ns) * 1e-9
-        if dt_s <= 0.0:
-            raise ValueError("Wheel timestamps are not strictly increasing")
-        total_duration_s += dt_s
-        if abs(current.yaw_rate_rad_s) >= yaw_rate_threshold_rad_s:
-            turning_duration_s += dt_s
-    return turning_duration_s / total_duration_s if total_duration_s else 0.0
-
-
 def run(
     config: RunConfig,
     mode: str,
@@ -365,10 +325,10 @@ def run(
     _require_inputs(config.general.dataset, mode=mode, validate=validate)
     config.general.output.mkdir(parents=True, exist_ok=True)
     imu = list(read_imu(config.general.dataset))
-    wheels = _load_wheels(config)
+    wheels = _load_wheels(config) if mode in ("base", "visual", "all") else []
     visual: VisualOdometryResult | None = None
     visual_ready = False
-    if mode in ("visual", "vio", "full", "all"):
+    if mode in ("visual", "all"):
         visual = (
             read_visual_odometry(config)
             if reuse_frontends
@@ -384,79 +344,29 @@ def run(
             f"{visual.attempted_pairs}, rejected={visual.rejected_pairs}, "
             f"fusion={'enabled' if visual_ready else 'disabled (low coverage)'}"
         )
-    vio: VioOdometryResult | None = None
-    vio_ready = False
-    if mode in ("vio", "full", "all"):
-        assert visual is not None
+    vio: VioTrajectoryResult | None = None
+    if mode in ("vio", "all"):
         vio = (
-            read_vio_odometry(config, visual)
-            if reuse_frontends
-            and (config.general.output / "vio_odometry.csv").exists()
-            else compute_vio_odometry(config, imu, visual)
-        )
-        vio_ready = _frontend_ready(
-            len(vio.motions),
-            vio.attempted_pairs,
-            config.vio.min_fusion_coverage,
+            read_vio_trajectory(config)
+            if reuse_frontends and (config.general.output / "vio_trajectory.csv").exists()
+            else compute_vio_trajectory(config, imu)
         )
         print(
-            f"vio frontend: accepted={len(vio.motions)}/"
+            f"vio estimator: visual_factors={vio.visual_factors}/"
             f"{vio.attempted_pairs}, rejected={vio.rejected_pairs}, "
-            f"fusion={'enabled' if vio_ready else 'disabled (low coverage)'}"
+            f"states={len(vio.states)}"
         )
-    lidar: LidarOdometryResult | None = None
-    lidar_ready = False
-    if mode in ("lidar", "full", "all"):
-        turning_fraction = wheel_turning_fraction(
-            wheels,
-            yaw_rate_threshold_rad_s=(
-                config.lidar_odometry.turning_yaw_rate_rad_s
-            ),
-        )
-        motion_ready = (
-            turning_fraction >= config.lidar_odometry.min_turning_fraction
-        )
-        if motion_ready:
-            lidar = (
-                read_lidar_odometry(config)
-                if reuse_frontends
-                else compute_lidar_odometry(config, wheels)
-            )
-            lidar_ready = _frontend_ready(
-                len(lidar.motions),
-                lidar.attempted_pairs,
-                config.lidar_odometry.min_fusion_coverage,
-            )
-            print(
-                f"lidar frontend: accepted={len(lidar.motions)}/"
-                f"{lidar.attempted_pairs}, rejected={lidar.rejected_pairs}, "
-                f"turning={turning_fraction:.1%}, "
-                f"fusion={'enabled' if lidar_ready else 'disabled (low coverage)'}"
-            )
-        else:
-            print(
-                f"lidar frontend: skipped, turning={turning_fraction:.1%} "
-                f"< {config.lidar_odometry.min_turning_fraction:.1%}"
-            )
-    modes = (
-        ["base", "visual", "vio", "lidar", "full"]
-        if mode == "all"
-        else [mode]
-    )
-    results = []
-    for name in modes:
+
+    filter_modes = ["base", "visual"] if mode == "all" else [mode]
+    results: list[ExperimentResult] = []
+    for name in filter_modes:
+        if name == "vio":
+            continue
         relative_streams = []
         relative_epoch_streams = []
-        if name in ("visual", "full") and visual and visual_ready:
-            if name == "visual" or not vio_ready:
-                relative_streams.append(visual.motions)
-                relative_epoch_streams.append(visual.epochs)
-        if name in ("vio", "full") and vio and vio_ready:
-            relative_streams.append(vio.motions)
-            relative_epoch_streams.append(vio.epochs)
-        if name in ("lidar", "full") and lidar and lidar_ready:
-            relative_streams.append(lidar.motions)
-            relative_epoch_streams.append(lidar.epochs)
+        if name == "visual" and visual and visual_ready:
+            relative_streams.append(visual.motions)
+            relative_epoch_streams.append(visual.epochs)
         results.append(
             _run_filter(
                 config,
@@ -466,6 +376,21 @@ def run(
                 relative_streams,
                 relative_epoch_streams,
                 max_events=max_events,
+            )
+        )
+    if vio is not None:
+        if not vio.states:
+            raise ValueError("VIO produced no states")
+        _write_estimates(config.general.output / "estimated_state_vio.csv", vio.states)
+        results.append(
+            ExperimentResult(
+                "vio",
+                vio.states,
+                wheel_updates=0,
+                rejected_wheel_updates=0,
+                relative_updates=vio.visual_factors,
+                rejected_relative_updates=vio.rejected_pairs,
+                available_relative_updates=vio.attempted_pairs,
             )
         )
 

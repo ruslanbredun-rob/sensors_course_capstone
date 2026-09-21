@@ -153,11 +153,9 @@ def _save_result_plots(
 def _save_diagnostic_plots(
     config: RunConfig, evaluations: dict[str, PositionEvaluation]
 ) -> None:
-    mode = next(
-        name
-        for name in ("full", "lidar", "vio", "visual", "base")
-        if name in evaluations
-    )
+    mode = next((name for name in ("visual", "base") if name in evaluations), None)
+    if mode is None:
+        return
     output = config.general.output
     save_consistency_plot(
         output,

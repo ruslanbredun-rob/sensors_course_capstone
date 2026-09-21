@@ -17,9 +17,7 @@ from src.evaluation.metrics import PositionEvaluation
 DISPLAY_NAMES = {
     "base": "INS baseline (IMU + wheel)",
     "visual": "Baseline + stereo VO",
-    "vio": "Baseline + simplified VIO",
-    "lidar": "Baseline + LiDAR (no camera)",
-    "full": "Selected fusion (VO/LiDAR health gates)",
+    "vio": "Stereo VIO (features + IMU)",
 }
 
 
@@ -214,7 +212,7 @@ def save_consistency_plot(
         ),
         (
             *_numeric_column(relative_rows, "pose_nis"),
-            "VO/LiDAR pose NIS after adaptation",
+            "VO pose NIS after adaptation",
             relative_pose_threshold,
         ),
         (

@@ -1,7 +1,7 @@
 """Planar multi-sensor EKF for homework 18 and 19.
 
 State is [x, y, yaw, speed, gyro_z_bias, accel_x_bias]. The world origin and
-initial yaw are arbitrary. Wheel, stereo VO and LiDAR odometry provide local
+initial yaw are arbitrary. Wheel and stereo VO provide local
 updates; VRS and IMU Euler attitude are never fused.
 """
 
@@ -217,7 +217,7 @@ class VehicleEKF:
         return self._estimate()
 
     def update_relative_motion(self, measurement: RelativeMotion) -> Estimate:
-        """Fuse body-forward speed and yaw rate from VO or LiDAR odometry."""
+        """Fuse body-forward speed and yaw rate from relative odometry."""
         if measurement.dt_s <= 0.0:
             raise ValueError("Relative-motion dt_s must be positive")
         self._advance(measurement.timestamp_ns)
@@ -259,7 +259,7 @@ class VehicleEKF:
         return self._estimate()
 
     def store_relative_pose_anchor(self, source: str, timestamp_ns: int) -> Estimate:
-        """Clone the current pose and its correlation for the next VO/LO edge."""
+        """Clone the current pose and its correlation for the next VO edge."""
         if not source:
             raise ValueError("Relative-pose source must be non-empty")
         self._advance(timestamp_ns)

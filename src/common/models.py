@@ -43,7 +43,7 @@ class RelativeMotion:
 
 @dataclass(frozen=True)
 class RelativePoseEpoch:
-    """Timestamp at which a VO/LO frontend starts its next pose increment."""
+    """Timestamp at which a VO frontend starts its next pose increment."""
 
     timestamp_ns: int
     source: str
