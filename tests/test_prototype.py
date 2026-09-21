@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
+from src.camera.vio import ImuPreintegration, SlidingWindowVio, preintegrate_imu
 from src.common.config import load_config
 from src.common.models import (
     EncoderSample,
@@ -43,6 +44,7 @@ class PrototypeTests(unittest.TestCase):
         self.assertGreater(config.wheel.speed_nis_threshold, 0.0)
         self.assertGreater(config.visual_odometry.min_matches, 0)
         self.assertLessEqual(config.visual_odometry.min_fusion_coverage, 1.0)
+        self.assertGreater(config.vio.window_size, 1)
         self.assertGreater(config.lidar_odometry.voxel_m, 0.0)
         self.assertLessEqual(config.lidar_odometry.min_turning_fraction, 1.0)
 
@@ -118,6 +120,42 @@ class PrototypeTests(unittest.TestCase):
             sample = next(read_imu(Path(directory)))
             self.assertEqual(sample.yaw_rate_rad_s, 0.2)
             self.assertEqual(sample.forward_accel_m_s2, 1.5)
+
+    def test_imu_preintegration_uses_camera_interval_boundaries(self) -> None:
+        samples = [
+            ImuSample(0, 0.1, 1.0),
+            ImuSample(1_000_000_000, 0.2, 3.0),
+            ImuSample(2_000_000_000, 0.3, 5.0),
+        ]
+        result = preintegrate_imu(
+            samples,
+            [sample.timestamp_ns for sample in samples],
+            500_000_000,
+            1_500_000_000,
+        )
+        self.assertAlmostEqual(result.dt_s, 1.0)
+        self.assertAlmostEqual(result.mean_gyro_rad_s, 0.15)
+        self.assertAlmostEqual(result.mean_accel_m_s2, 2.0)
+
+    def test_sliding_window_vio_blends_visual_and_inertial_yaw(self) -> None:
+        estimator = SlidingWindowVio(load_config(Path("config/default.json")))
+        fused = estimator.add(
+            RelativeMotion(
+                timestamp_ns=100_000_000,
+                dt_s=0.1,
+                dx_m=1.0,
+                dy_m=0.0,
+                dyaw_rad=0.01,
+                source="visual",
+                translation_std_m=0.5,
+                yaw_std_rad=0.04,
+                quality=1.0,
+            ),
+            ImuPreintegration(0.1, 0.2, 0.0),
+        )
+        self.assertEqual(fused.source, "vio")
+        self.assertGreater(fused.dyaw_rad, 0.01)
+        self.assertLess(fused.dyaw_rad, 0.02)
 
     def test_wheel_speed_uses_calibration_and_actual_dt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

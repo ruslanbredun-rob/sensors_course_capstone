@@ -53,6 +53,19 @@ class VisualOdometryConfig:
 
 
 @dataclass(frozen=True)
+class VioConfig:
+    window_size: int
+    visual_speed_std_m_s: float
+    visual_yaw_std_rad: float
+    imu_accel_std_m_s2: float
+    imu_gyro_std_rad_s: float
+    gyro_bias_prior_std_rad_s: float
+    accel_bias_prior_std_m_s2: float
+    max_scale_correction: float
+    min_fusion_coverage: float
+
+
+@dataclass(frozen=True)
 class LidarOdometryConfig:
     frame_step: int
     voxel_m: float
@@ -82,6 +95,7 @@ class RunConfig:
     imu: ImuConfig
     wheel: WheelConfig
     visual_odometry: VisualOdometryConfig
+    vio: VioConfig
     lidar_odometry: LidarOdometryConfig
     fusion: FusionConfig
 
@@ -122,6 +136,7 @@ def load_config(
     imu = _section(values, "imu", config_path)
     wheel = _section(values, "wheel", config_path)
     visual = _section(values, "visual_odometry", config_path)
+    vio = _section(values, "vio", config_path)
     lidar = _section(values, "lidar_odometry", config_path)
     fusion = _section(values, "fusion", config_path)
 
@@ -168,6 +183,22 @@ def load_config(
         config_path,
     )
     _positive(
+        vio,
+        "vio",
+        (
+            "window_size",
+            "visual_speed_std_m_s",
+            "visual_yaw_std_rad",
+            "imu_accel_std_m_s2",
+            "imu_gyro_std_rad_s",
+            "gyro_bias_prior_std_rad_s",
+            "accel_bias_prior_std_m_s2",
+            "max_scale_correction",
+            "min_fusion_coverage",
+        ),
+        config_path,
+    )
+    _positive(
         lidar,
         "lidar_odometry",
         (
@@ -186,6 +217,7 @@ def load_config(
     )
     for section_name, section in (
         ("visual_odometry", visual),
+        ("vio", vio),
         ("lidar_odometry", lidar),
     ):
         if float(section["min_fusion_coverage"]) > 1.0:
@@ -244,6 +276,17 @@ def load_config(
             min_quality=float(visual["min_quality"]),
             max_speed_m_s=float(visual["max_speed_m_s"]),
             min_fusion_coverage=float(visual["min_fusion_coverage"]),
+        ),
+        vio=VioConfig(
+            window_size=int(vio["window_size"]),
+            visual_speed_std_m_s=float(vio["visual_speed_std_m_s"]),
+            visual_yaw_std_rad=float(vio["visual_yaw_std_rad"]),
+            imu_accel_std_m_s2=float(vio["imu_accel_std_m_s2"]),
+            imu_gyro_std_rad_s=float(vio["imu_gyro_std_rad_s"]),
+            gyro_bias_prior_std_rad_s=float(vio["gyro_bias_prior_std_rad_s"]),
+            accel_bias_prior_std_m_s2=float(vio["accel_bias_prior_std_m_s2"]),
+            max_scale_correction=float(vio["max_scale_correction"]),
+            min_fusion_coverage=float(vio["min_fusion_coverage"]),
         ),
         lidar_odometry=LidarOdometryConfig(
             frame_step=int(lidar["frame_step"]),

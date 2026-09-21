@@ -30,6 +30,17 @@
     "max_speed_m_s": 40.0,
     "min_fusion_coverage": 0.3
   },
+  "vio": {
+    "window_size": 8,
+    "visual_speed_std_m_s": 1.5,
+    "visual_yaw_std_rad": 0.04,
+    "imu_accel_std_m_s2": 0.8,
+    "imu_gyro_std_rad_s": 0.03,
+    "gyro_bias_prior_std_rad_s": 0.03,
+    "accel_bias_prior_std_m_s2": 0.5,
+    "max_scale_correction": 2.0,
+    "min_fusion_coverage": 0.3
+  },
   "lidar_odometry": {
     "frame_step": 1,
     "voxel_m": 0.25,
