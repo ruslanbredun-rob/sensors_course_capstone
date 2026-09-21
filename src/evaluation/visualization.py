@@ -15,11 +15,10 @@ from src.evaluation.metrics import PositionEvaluation
 
 
 DISPLAY_NAMES = {
-    "base": "E1 INS baseline (IMU + wheel)",
-    "slip": "E2 kinematics + slip",
-    "visual": "E2 + stereo VO",
-    "lidar": "E2 + LiDAR (no camera)",
-    "full": "E2 + stereo VO + LiDAR",
+    "base": "Adaptive INS baseline (IMU + wheel)",
+    "visual": "Baseline + stereo VO",
+    "lidar": "Baseline + LiDAR (no camera)",
+    "full": "Baseline + stereo VO + LiDAR",
 }
 
 
@@ -240,48 +239,6 @@ def save_consistency_plot(
     figure.suptitle(f"Filter consistency diagnostics: {DISPLAY_NAMES.get(mode, mode)}")
     figure.tight_layout()
     figure.savefig(output_root / "screenshots" / "filter_consistency.png", dpi=180)
-    plt.close(figure)
-
-
-def save_slip_plot(output_root: Path, mode: str = "slip") -> None:
-    """Visualize labelled encoder fault and debounced detector output."""
-    rows = list(
-        csv.DictReader(
-            (output_root / f"diagnostics_{mode}.csv").open(encoding="utf-8")
-        )
-    )
-    if not rows or not any(row["fault_injected"] == "True" for row in rows):
-        return
-    timestamps = np.array([int(row["timestamp_ns"]) for row in rows])
-    elapsed = (timestamps - timestamps[0]) * 1e-9
-    yaw_rate = np.array([float(row["wheel_yaw_rate_rad_s"]) for row in rows])
-    injected = np.array([row["fault_injected"] == "True" for row in rows])
-    detected = np.array([row["slip_active"] == "True" for row in rows])
-    figure, axes = plt.subplots(2, 1, figsize=(9, 5.5), sharex=True)
-    axes[0].plot(elapsed, yaw_rate, linewidth=0.8, label="Wheel yaw rate")
-    axes[0].fill_between(
-        elapsed,
-        yaw_rate.min(),
-        yaw_rate.max(),
-        where=injected,
-        alpha=0.2,
-        color="tab:red",
-        label="Injected right-wheel fault",
-    )
-    axes[0].set_ylabel("Yaw rate (rad/s)")
-    axes[0].grid(True, alpha=0.3)
-    axes[0].legend()
-    axes[1].step(elapsed, injected.astype(int), where="post", label="Fault label")
-    axes[1].step(elapsed, detected.astype(int), where="post", label="Slip detected")
-    axes[1].set_xlabel("Time (s)")
-    axes[1].set_ylabel("Active (-)")
-    axes[1].set_yticks((0, 1))
-    axes[1].grid(True, alpha=0.3)
-    axes[1].legend()
-    figure.tight_layout()
-    screenshot_dir = output_root / "screenshots"
-    screenshot_dir.mkdir(parents=True, exist_ok=True)
-    figure.savefig(screenshot_dir / "slip_detection.png", dpi=180)
     plt.close(figure)
 
 

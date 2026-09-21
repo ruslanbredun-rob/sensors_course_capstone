@@ -20,7 +20,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, help="Override result directory")
     parser.add_argument(
         "--mode",
-        choices=("base", "slip", "visual", "lidar", "full", "all"),
+        choices=("base", "visual", "lidar", "full", "all"),
         default="base",
     )
     parser.add_argument(
@@ -32,11 +32,6 @@ def main() -> None:
         "--validate",
         action="store_true",
         help="Evaluate the output trajectory against valid VRS-GPS fixes",
-    )
-    parser.add_argument(
-        "--inject-slip",
-        action="store_true",
-        help="Inject a labelled right-wheel scale fault for detector evaluation",
     )
     parser.add_argument(
         "--reuse-frontends",
@@ -52,7 +47,6 @@ def main() -> None:
         args.mode,
         max_events=args.max_events,
         validate=args.validate,
-        inject_slip=args.inject_slip,
         reuse_frontends=args.reuse_frontends,
     )
 

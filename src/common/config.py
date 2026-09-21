@@ -22,6 +22,8 @@ class GeneralConfig:
 class EvaluationConfig:
     reference_fix_state: int
     reference_tolerance_ns: int
+    segment_max_gap_ns: int
+    segment_min_epochs: int
 
 
 @dataclass(frozen=True)
@@ -41,14 +43,17 @@ class WheelConfig:
 
 
 @dataclass(frozen=True)
-class SlipConfig:
-    yaw_threshold_rad_s: float
-    accel_threshold_m_s2: float
-    enter_count: int
-    exit_count: int
-    fault_start_s: float
-    fault_duration_s: float
-    fault_right_scale: float
+class AdaptationConfig:
+    turn_yaw_rate_threshold_rad_s: float
+    ema_alpha: float
+    min_measurement_scale: float
+    max_measurement_scale: float
+    straight_speed_scale: float
+    straight_yaw_scale: float
+    turn_speed_scale: float
+    turn_yaw_scale: float
+    straight_bias_walk_scale: float
+    turn_bias_walk_scale: float
 
 
 @dataclass(frozen=True)
@@ -71,6 +76,12 @@ class LidarOdometryConfig:
     min_quality: float
     initial_speed_m_s: float
     min_fusion_coverage: float
+    deskew_scan_period_s: float
+    local_map_scans: int
+    map_voxel_m: float
+    max_iterations: int
+    map_yaw_correction_weight: float
+    map_measurement_weight: float
 
 
 @dataclass(frozen=True)
@@ -88,7 +99,7 @@ class RunConfig:
     evaluation: EvaluationConfig
     imu: ImuConfig
     wheel: WheelConfig
-    slip: SlipConfig
+    adaptation: AdaptationConfig
     visual_odometry: VisualOdometryConfig
     lidar_odometry: LidarOdometryConfig
     fusion: FusionConfig
@@ -129,13 +140,18 @@ def load_config(
     evaluation = _section(values, "evaluation", config_path)
     imu = _section(values, "imu", config_path)
     wheel = _section(values, "wheel", config_path)
-    slip = _section(values, "slip", config_path)
+    adaptation = _section(values, "adaptation", config_path)
     visual = _section(values, "visual_odometry", config_path)
     lidar = _section(values, "lidar_odometry", config_path)
     fusion = _section(values, "fusion", config_path)
 
     _positive(general, "general", ("max_dt_s",), config_path)
-    _positive(evaluation, "evaluation", ("reference_tolerance_ms",), config_path)
+    _positive(
+        evaluation,
+        "evaluation",
+        ("reference_tolerance_ms", "segment_max_gap_s", "segment_min_epochs"),
+        config_path,
+    )
     _positive(
         imu,
         "imu",
@@ -159,15 +175,19 @@ def load_config(
         config_path,
     )
     _positive(
-        slip,
-        "slip",
+        adaptation,
+        "adaptation",
         (
-            "yaw_threshold_rad_s",
-            "accel_threshold_m_s2",
-            "enter_count",
-            "exit_count",
-            "fault_duration_s",
-            "fault_right_scale",
+            "turn_yaw_rate_threshold_rad_s",
+            "ema_alpha",
+            "min_measurement_scale",
+            "max_measurement_scale",
+            "straight_speed_scale",
+            "straight_yaw_scale",
+            "turn_speed_scale",
+            "turn_yaw_scale",
+            "straight_bias_walk_scale",
+            "turn_bias_walk_scale",
         ),
         config_path,
     )
@@ -196,6 +216,12 @@ def load_config(
             "min_quality",
             "initial_speed_m_s",
             "min_fusion_coverage",
+            "deskew_scan_period_s",
+            "local_map_scans",
+            "map_voxel_m",
+            "max_iterations",
+            "map_yaw_correction_weight",
+            "map_measurement_weight",
         ),
         config_path,
     )
@@ -207,6 +233,22 @@ def load_config(
             raise ValueError(
                 f"{config_path}: {section_name}.min_fusion_coverage must be <= 1"
             )
+    if float(adaptation["ema_alpha"]) > 1.0:
+        raise ValueError(f"{config_path}: adaptation.ema_alpha must be <= 1")
+    if float(adaptation["min_measurement_scale"]) > float(
+        adaptation["max_measurement_scale"]
+    ):
+        raise ValueError(
+            f"{config_path}: adaptation measurement scale bounds are inverted"
+        )
+    if float(lidar["map_yaw_correction_weight"]) > 1.0:
+        raise ValueError(
+            f"{config_path}: lidar_odometry.map_yaw_correction_weight must be <= 1"
+        )
+    if float(lidar["map_measurement_weight"]) > 1.0:
+        raise ValueError(
+            f"{config_path}: lidar_odometry.map_measurement_weight must be <= 1"
+        )
     _positive(
         fusion,
         "fusion",
@@ -233,6 +275,8 @@ def load_config(
         evaluation=EvaluationConfig(
             reference_fix_state=int(evaluation["reference_fix_state"]),
             reference_tolerance_ns=int(evaluation["reference_tolerance_ms"] * 1_000_000),
+            segment_max_gap_ns=int(evaluation["segment_max_gap_s"] * 1_000_000_000),
+            segment_min_epochs=int(evaluation["segment_min_epochs"]),
         ),
         imu=ImuConfig(
             gyro_std_rad_s=float(imu["gyro_std_rad_s"]),
@@ -246,14 +290,19 @@ def load_config(
             speed_nis_threshold=float(wheel["speed_nis_threshold"]),
             yaw_nis_threshold=float(wheel["yaw_nis_threshold"]),
         ),
-        slip=SlipConfig(
-            yaw_threshold_rad_s=float(slip["yaw_threshold_rad_s"]),
-            accel_threshold_m_s2=float(slip["accel_threshold_m_s2"]),
-            enter_count=int(slip["enter_count"]),
-            exit_count=int(slip["exit_count"]),
-            fault_start_s=float(slip["fault_start_s"]),
-            fault_duration_s=float(slip["fault_duration_s"]),
-            fault_right_scale=float(slip["fault_right_scale"]),
+        adaptation=AdaptationConfig(
+            turn_yaw_rate_threshold_rad_s=float(
+                adaptation["turn_yaw_rate_threshold_rad_s"]
+            ),
+            ema_alpha=float(adaptation["ema_alpha"]),
+            min_measurement_scale=float(adaptation["min_measurement_scale"]),
+            max_measurement_scale=float(adaptation["max_measurement_scale"]),
+            straight_speed_scale=float(adaptation["straight_speed_scale"]),
+            straight_yaw_scale=float(adaptation["straight_yaw_scale"]),
+            turn_speed_scale=float(adaptation["turn_speed_scale"]),
+            turn_yaw_scale=float(adaptation["turn_yaw_scale"]),
+            straight_bias_walk_scale=float(adaptation["straight_bias_walk_scale"]),
+            turn_bias_walk_scale=float(adaptation["turn_bias_walk_scale"]),
         ),
         visual_odometry=VisualOdometryConfig(
             frame_step=int(visual["frame_step"]),
@@ -272,6 +321,12 @@ def load_config(
             min_quality=float(lidar["min_quality"]),
             initial_speed_m_s=float(lidar["initial_speed_m_s"]),
             min_fusion_coverage=float(lidar["min_fusion_coverage"]),
+            deskew_scan_period_s=float(lidar["deskew_scan_period_s"]),
+            local_map_scans=int(lidar["local_map_scans"]),
+            map_voxel_m=float(lidar["map_voxel_m"]),
+            max_iterations=int(lidar["max_iterations"]),
+            map_yaw_correction_weight=float(lidar["map_yaw_correction_weight"]),
+            map_measurement_weight=float(lidar["map_measurement_weight"]),
         ),
         fusion=FusionConfig(
             relative_speed_nis_threshold=float(fusion["relative_speed_nis_threshold"]),

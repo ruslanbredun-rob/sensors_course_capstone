@@ -20,7 +20,7 @@
 | Частота оцінки стану | 100 Hz | Частота потоків IMU та енкодерів у вибраній послідовності |
 | Частота зовнішніх корекцій | до 10 Hz | Частота stereo camera та LiDAR |
 | Точність позиції | 2D RMSE ≤ 10 м і покращення відносно E1 Wheel+IMU | Реалістична ціль для порівняння конфігурацій на вибраній послідовності |
-| Стійкість до пробуксовування | Ненадійне wheel update відкидається або отримує збільшену коваріацію | Не дозволяє одному хибному вимірюванню визначати траєкторію |
+| Стійкість до wheel outliers | Ненадійне update відкидається, а noise адаптується за NIS | Не дозволяє одному хибному вимірюванню визначати траєкторію |
 | Затримка | Не нормується: обробка записаних даних offline | Система не керує автомобілем у реальному часі |
 | Середовище | Міські дороги, повороти, динамічні об'єкти та зміни освітлення | Умови вибраної послідовності |
 
@@ -58,12 +58,10 @@ Complex Urban Dataset / urban35
       |
 timestamp sync + loaders
       |
-      +--> encoders --> wheel odometry --+--> 2D EKF --> x, y, yaw, v
-      |                    |              ^       ^
-      |              slip detection ------+       |
-      +--> Xsens IMU --> prediction --------------+
-      +--> stereo images --> visual odometry ------+
-      +--> VLP scans --> LiDAR odometry -----------+
+      +--> encoders --> wheel odometry --> regime/NIS adaptation --+
+      +--> Xsens IMU --> prediction -------------------------------+--> 2D EKF
+      +--> stereo images --> visual odometry --> quality/NIS -------+      |
+      +--> VLP scans --> deskew + local-map odometry --> quality/NIS+      +--> x,y,yaw,v
 
 VRS-GPS (valid RTK fix) + FOG --> evaluation only
 ```

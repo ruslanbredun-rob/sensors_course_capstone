@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import math
 from bisect import bisect_left
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,7 +13,12 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from src.common.config import RunConfig
-from src.common.models import RelativeMotion, RelativePoseEpoch, WheelMeasurement
+from src.common.models import (
+    ImuSample,
+    RelativeMotion,
+    RelativePoseEpoch,
+    WheelMeasurement,
+)
 from src.dataset.calibration import read_rigid_transform
 
 
@@ -51,18 +57,19 @@ def rigid_fit_2d(source: np.ndarray, target: np.ndarray) -> tuple[np.ndarray, np
 
 
 def icp_2d(
-    previous: np.ndarray,
+    target: np.ndarray,
     current: np.ndarray,
     *,
     initial_translation: np.ndarray,
     initial_yaw_rad: float,
     max_correspondence_m: float,
     max_iterations: int = 20,
+    yaw_correction_weight: float = 1.0,
 ) -> IcpResult | None:
-    """Align current scan into the previous vehicle frame."""
-    if len(previous) < 50 or len(current) < 50:
+    """Align current points into the target frame."""
+    if len(target) < 50 or len(current) < 50:
         return None
-    tree = cKDTree(previous)
+    tree = cKDTree(target)
     cosine, sine = math.cos(initial_yaw_rad), math.sin(initial_yaw_rad)
     rotation = np.array(((cosine, -sine), (sine, cosine)))
     translation = initial_translation.astype(float).copy()
@@ -76,7 +83,7 @@ def icp_2d(
         trim_limit = float(np.quantile(distances[valid], 0.75))
         valid &= distances <= trim_limit
         new_rotation, new_translation = rigid_fit_2d(
-            current[valid], previous[indices[valid]]
+            current[valid], target[indices[valid]]
         )
         delta_translation = float(np.linalg.norm(new_translation - translation))
         delta_rotation = new_rotation @ rotation.T
@@ -86,6 +93,24 @@ def icp_2d(
         if delta_translation < 1e-3 and delta_yaw < 1e-5:
             break
 
+    fitted_yaw = math.atan2(rotation[1, 0], rotation[0, 0])
+    yaw_delta = math.atan2(
+        math.sin(fitted_yaw - initial_yaw_rad),
+        math.cos(fitted_yaw - initial_yaw_rad),
+    )
+    regularized_yaw = initial_yaw_rad + yaw_correction_weight * yaw_delta
+    rotation = _rotation_2d(regularized_yaw)
+    # With yaw regularized by the IMU prior, refit translation for the last
+    # robust correspondence set instead of keeping the unconstrained ICP value.
+    fitted_points = current @ rotation.T
+    provisional = fitted_points + translation
+    distances, indices = tree.query(provisional, k=1)
+    valid = distances < max_correspondence_m
+    if int(valid.sum()) >= 50:
+        trim_limit = float(np.quantile(distances[valid], 0.75))
+        valid &= distances <= trim_limit
+        translation = np.mean(target[indices[valid]] - fitted_points[valid], axis=0)
+
     transformed = current @ rotation.T + translation
     distances, _ = tree.query(transformed, k=1)
     inliers = distances < max_correspondence_m
@@ -93,7 +118,7 @@ def icp_2d(
         return None
     return IcpResult(
         translation_m=translation,
-        yaw_rad=math.atan2(rotation[1, 0], rotation[0, 0]),
+        yaw_rad=regularized_yaw,
         rmse_m=float(np.sqrt(np.mean(distances[inliers] ** 2))),
         inlier_ratio=float(np.mean(inliers)),
         iterations=used_iterations,
@@ -107,12 +132,24 @@ class _LidarFrontend:
             config.general.dataset / "calibration" / "Vehicle2LeftVLP.txt"
         )
 
-    def read_scan(self, path: Path) -> np.ndarray:
+    def read_scan(
+        self,
+        path: Path,
+        *,
+        speed_m_s: float,
+        yaw_rate_rad_s: float,
+    ) -> np.ndarray:
         values = np.fromfile(path, dtype=np.float32)
         if values.size == 0 or values.size % 4:
             raise ValueError(f"{path}: expected float32 [x, y, z, intensity] records")
         sensor_xyz = values.reshape(-1, 4)[:, :3]
         vehicle_xyz = sensor_xyz @ self.rotation.T + self.translation
+        vehicle_xyz[:, :2] = deskew_points_2d(
+            vehicle_xyz[:, :2],
+            speed_m_s=speed_m_s,
+            yaw_rate_rad_s=yaw_rate_rad_s,
+            scan_period_s=self.config.lidar_odometry.deskew_scan_period_s,
+        )
         radius = np.linalg.norm(vehicle_xyz[:, :2], axis=1)
         keep = (
             np.all(np.isfinite(vehicle_xyz), axis=1)
@@ -122,9 +159,83 @@ class _LidarFrontend:
             & (vehicle_xyz[:, 2] < 2.5)
         )
         xy = vehicle_xyz[keep, :2]
-        cells = np.floor(xy / self.config.lidar_odometry.voxel_m).astype(np.int64)
-        _, indices = np.unique(cells, axis=0, return_index=True)
-        return xy[np.sort(indices)]
+        return _voxel_downsample(xy, self.config.lidar_odometry.voxel_m)
+
+
+def deskew_points_2d(
+    points: np.ndarray,
+    *,
+    speed_m_s: float,
+    yaw_rate_rad_s: float,
+    scan_period_s: float,
+) -> np.ndarray:
+    """Move ordered VLP-16 points to the scan-end vehicle frame."""
+    if points.ndim != 2 or points.shape[1] != 2:
+        raise ValueError("points must be an Nx2 array")
+    if scan_period_s <= 0.0 or not len(points):
+        return points.copy()
+    relative_time = (np.arange(len(points), dtype=float) + 1.0) / len(points) - 1.0
+    relative_time *= scan_period_s
+    yaw = yaw_rate_rad_s * relative_time
+    cosine, sine = np.cos(yaw), np.sin(yaw)
+    if abs(yaw_rate_rad_s) > 1e-8:
+        translation_x = speed_m_s / yaw_rate_rad_s * np.sin(yaw)
+        translation_y = speed_m_s / yaw_rate_rad_s * (1.0 - np.cos(yaw))
+    else:
+        translation_x = speed_m_s * relative_time
+        translation_y = np.zeros_like(relative_time)
+    deskewed = np.empty_like(points, dtype=float)
+    deskewed[:, 0] = (
+        cosine * points[:, 0] - sine * points[:, 1] + translation_x
+    )
+    deskewed[:, 1] = (
+        sine * points[:, 0] + cosine * points[:, 1] + translation_y
+    )
+    return deskewed
+
+
+def _voxel_downsample(points: np.ndarray, voxel_m: float) -> np.ndarray:
+    if not len(points):
+        return points
+    cells = np.floor(points / voxel_m).astype(np.int64)
+    _, indices = np.unique(cells, axis=0, return_index=True)
+    return points[np.sort(indices)]
+
+
+def _rotation_2d(yaw_rad: float) -> np.ndarray:
+    cosine, sine = math.cos(yaw_rad), math.sin(yaw_rad)
+    return np.array(((cosine, -sine), (sine, cosine)))
+
+
+def _nearest_sample(samples: list, timestamps: list[int], timestamp_ns: int):
+    if not samples:
+        return None
+    position = bisect_left(timestamps, timestamp_ns)
+    candidates = [
+        index for index in (position - 1, position) if 0 <= index < len(samples)
+    ]
+    return samples[
+        min(candidates, key=lambda index: abs(timestamps[index] - timestamp_ns))
+    ]
+
+
+def _motion_hint(
+    timestamp_ns: int,
+    wheels: list[WheelMeasurement],
+    wheel_timestamps: list[int],
+    imu: list[ImuSample],
+    imu_timestamps: list[int],
+    default_speed_m_s: float,
+) -> tuple[float, float]:
+    wheel = _nearest_sample(wheels, wheel_timestamps, timestamp_ns)
+    imu_sample = _nearest_sample(imu, imu_timestamps, timestamp_ns)
+    speed = wheel.speed_m_s if wheel is not None else default_speed_m_s
+    yaw_rate = imu_sample.yaw_rate_rad_s if imu_sample is not None else 0.0
+    return speed, yaw_rate
+
+
+def _local_map(scans: deque[np.ndarray], voxel_m: float) -> np.ndarray:
+    return _voxel_downsample(np.concatenate(tuple(scans)), voxel_m)
 
 
 def _timestamped_scans(directory: Path) -> list[tuple[int, Path]]:
@@ -196,91 +307,166 @@ def read_lidar_odometry(config: RunConfig) -> LidarOdometryResult:
 
 
 def compute_lidar_odometry(
-    config: RunConfig, wheels: list[WheelMeasurement] | None = None
+    config: RunConfig,
+    wheels: list[WheelMeasurement] | None = None,
+    imu: list[ImuSample] | None = None,
 ) -> LidarOdometryResult:
-    """Run scan-to-scan ICP and persist accepted relative motions."""
+    """Run IMU-deskewed scan-to-local-map ICP and persist pose increments."""
     scans = _timestamped_scans(
         config.general.dataset / "sensor_data" / "VLP_left"
     )[:: config.lidar_odometry.frame_step]
     if len(scans) < 2:
         raise FileNotFoundError("At least two left VLP-16 scans are required")
     frontend = _LidarFrontend(config)
-    previous_timestamp, previous_path = scans[0]
-    previous_points = frontend.read_scan(previous_path)
-    prior_speed = config.lidar_odometry.initial_speed_m_s
-    prior_yaw_rate = 0.0
     wheel_hints = wheels or []
+    imu_hints = imu or []
     wheel_timestamps = [sample.timestamp_ns for sample in wheel_hints]
+    imu_timestamps = [sample.timestamp_ns for sample in imu_hints]
+    previous_timestamp, previous_path = scans[0]
+    prior_speed, prior_yaw_rate = _motion_hint(
+        previous_timestamp,
+        wheel_hints,
+        wheel_timestamps,
+        imu_hints,
+        imu_timestamps,
+        config.lidar_odometry.initial_speed_m_s,
+    )
+    previous_points = frontend.read_scan(
+        previous_path,
+        speed_m_s=prior_speed,
+        yaw_rate_rad_s=prior_yaw_rate,
+    )
+    previous_rotation = np.eye(2)
+    previous_translation = np.zeros(2)
+    map_scans: deque[np.ndarray] = deque(
+        (previous_points.copy(),),
+        maxlen=config.lidar_odometry.local_map_scans,
+    )
     motions: list[RelativeMotion] = []
     rejected = 0
     for timestamp, path in scans[1:]:
         dt_s = (timestamp - previous_timestamp) * 1e-9
         if dt_s <= 0.0:
             raise ValueError("LiDAR timestamps are not strictly increasing")
-        current_points = frontend.read_scan(path)
-        if wheel_hints:
-            position = bisect_left(wheel_timestamps, timestamp)
-            candidates = [
-                index
-                for index in (position - 1, position)
-                if 0 <= index < len(wheel_hints)
-            ]
-            if candidates:
-                nearest = min(
-                    candidates,
-                    key=lambda index: abs(wheel_timestamps[index] - timestamp),
-                )
-                hint = wheel_hints[nearest]
-                prior_speed = hint.speed_m_s
-                prior_yaw_rate = hint.yaw_rate_rad_s
-        initial_translation = np.array((prior_speed * dt_s, 0.0))
-        initial_yaw = prior_yaw_rate * dt_s
-        result = icp_2d(
-            previous_points,
+        prior_speed, prior_yaw_rate = _motion_hint(
+            timestamp,
+            wheel_hints,
+            wheel_timestamps,
+            imu_hints,
+            imu_timestamps,
+            prior_speed,
+        )
+        current_points = frontend.read_scan(
+            path,
+            speed_m_s=prior_speed,
+            yaw_rate_rad_s=prior_yaw_rate,
+        )
+        initial_relative_translation = np.array((prior_speed * dt_s, 0.0))
+        initial_relative_yaw = prior_yaw_rate * dt_s
+        initial_relative_rotation = _rotation_2d(initial_relative_yaw)
+        initial_rotation = previous_rotation @ initial_relative_rotation
+        initial_translation = (
+            previous_translation
+            + previous_rotation @ initial_relative_translation
+        )
+        target_map = _local_map(map_scans, config.lidar_odometry.map_voxel_m)
+        map_result = icp_2d(
+            target_map,
             current_points,
             initial_translation=initial_translation,
-            initial_yaw_rad=initial_yaw,
+            initial_yaw_rad=math.atan2(initial_rotation[1, 0], initial_rotation[0, 0]),
             max_correspondence_m=config.lidar_odometry.max_correspondence_m,
+            max_iterations=max(4, config.lidar_odometry.max_iterations // 2),
+            yaw_correction_weight=config.lidar_odometry.map_yaw_correction_weight,
         )
-        accepted = result is not None
-        if result is not None:
-            speed = float(result.translation_m[0] / dt_s)
+        scan_result = icp_2d(
+            previous_points,
+            current_points,
+            initial_translation=initial_relative_translation,
+            initial_yaw_rad=initial_relative_yaw,
+            max_correspondence_m=config.lidar_odometry.max_correspondence_m,
+            max_iterations=config.lidar_odometry.max_iterations,
+        )
+
+        if map_result is not None:
+            current_rotation = _rotation_2d(map_result.yaw_rad)
+            current_translation = map_result.translation_m
+            map_relative_rotation = previous_rotation.T @ current_rotation
+            map_relative_translation = previous_rotation.T @ (
+                current_translation - previous_translation
+            )
+            map_relative_yaw = math.atan2(
+                map_relative_rotation[1, 0], map_relative_rotation[0, 0]
+            )
+        else:
+            current_rotation = initial_rotation
+            current_translation = initial_translation
+            map_relative_translation = initial_relative_translation
+            map_relative_yaw = initial_relative_yaw
+
+        accepted = scan_result is not None
+        if scan_result is not None:
+            map_weight = (
+                config.lidar_odometry.map_measurement_weight
+                if map_result is not None
+                else 0.0
+            )
+            relative_translation = (
+                (1.0 - map_weight) * scan_result.translation_m
+                + map_weight * map_relative_translation
+            )
+            yaw_difference = math.atan2(
+                math.sin(map_relative_yaw - scan_result.yaw_rad),
+                math.cos(map_relative_yaw - scan_result.yaw_rad),
+            )
+            relative_yaw = scan_result.yaw_rad + map_weight * yaw_difference
+            speed = float(relative_translation[0] / dt_s)
             quality = min(
                 1.0,
-                result.inlier_ratio
-                * math.exp(-result.rmse_m / config.lidar_odometry.max_rmse_m),
+                scan_result.inlier_ratio
+                * math.exp(-scan_result.rmse_m / config.lidar_odometry.max_rmse_m),
             )
             accepted = (
-                result.rmse_m <= config.lidar_odometry.max_rmse_m
-                and result.inlier_ratio >= config.lidar_odometry.min_inlier_ratio
+                scan_result.rmse_m <= config.lidar_odometry.max_rmse_m
+                and scan_result.inlier_ratio
+                >= config.lidar_odometry.min_inlier_ratio
                 and -5.0 <= speed <= 45.0
-                and abs(result.translation_m[1] / dt_s) <= 12.0
-                and abs(result.yaw_rad / dt_s) <= 1.5
-                and abs(result.translation_m[0] - initial_translation[0])
-                <= max(1.0, 0.5 * abs(initial_translation[0]))
-                and abs(result.yaw_rad - initial_yaw) <= 0.15
+                and abs(relative_translation[1] / dt_s) <= 12.0
+                and abs(relative_yaw / dt_s) <= 1.5
+                and abs(relative_translation[0] - initial_relative_translation[0])
+                <= max(1.0, 0.5 * abs(initial_relative_translation[0]))
+                and abs(relative_yaw - initial_relative_yaw) <= 0.15
                 and quality >= config.lidar_odometry.min_quality
             )
-        if accepted and result is not None:
+        if accepted and scan_result is not None:
+            shared_map_scale = 1.0 + 9.0 * config.lidar_odometry.map_measurement_weight
+            motion_scale = max(1.0, abs(speed) / 4.0)
+            uncertainty_scale = shared_map_scale * motion_scale
             motion = RelativeMotion(
                 timestamp_ns=timestamp,
                 dt_s=dt_s,
-                dx_m=float(result.translation_m[0]),
-                dy_m=float(result.translation_m[1]),
-                dyaw_rad=result.yaw_rad,
+                dx_m=float(relative_translation[0]),
+                dy_m=float(relative_translation[1]),
+                dyaw_rad=relative_yaw,
                 source="lidar",
-                translation_std_m=max(0.08, 0.5 * result.rmse_m),
-                yaw_std_rad=max(0.003, 0.015 * (1.0 - quality)),
+                # The map term shares geometry across consecutive 10 Hz edges;
+                # scale covariance by its weight and by motion during a scan.
+                translation_std_m=max(0.08, 0.5 * scan_result.rmse_m)
+                * uncertainty_scale,
+                yaw_std_rad=max(0.003, 0.015 * (1.0 - quality))
+                * uncertainty_scale,
                 quality=quality,
             )
             motions.append(motion)
-            if not wheel_hints:
-                prior_speed = speed
-                prior_yaw_rate = result.yaw_rad / dt_s
         else:
             rejected += 1
+        # Keep the local map moving with either scan-to-map or the wheel/IMU
+        # prior so one weak scan cannot make the map stale.
+        map_scans.append(current_points @ current_rotation.T + current_translation)
         previous_timestamp = timestamp
         previous_points = current_points
+        previous_rotation = current_rotation
+        previous_translation = current_translation
     _write_motions(config.general.output / "lidar_odometry.csv", motions)
     epochs = [RelativePoseEpoch(timestamp, "lidar") for timestamp, _ in scans]
     return LidarOdometryResult(motions, epochs, len(scans) - 1, rejected)

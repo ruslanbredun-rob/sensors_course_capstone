@@ -26,7 +26,6 @@ class WheelMeasurement:
     yaw_rate_rad_s: float
     left_speed_m_s: float = 0.0
     right_speed_m_s: float = 0.0
-    fault_injected: bool = False
 
 
 @dataclass(frozen=True)

@@ -5,7 +5,10 @@ from __future__ import annotations
 import math
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+
+import numpy as np
 
 from src.common.config import load_config
 from src.common.models import (
@@ -18,12 +21,11 @@ from src.common.models import (
 )
 from src.common.synchronization import ordered_events
 from src.dataset.readers import read_vrs_reference
-from src.evaluation.metrics import evaluate_position
+from src.evaluation.metrics import evaluate_position, evaluate_rtk_segments
 from src.fusion.ekf import VehicleEKF
 from src.imu.reader import read_imu
-from src.lidar.odometry import rigid_fit_2d
+from src.lidar.odometry import deskew_points_2d, rigid_fit_2d
 from src.wheel.odometry import wheel_measurements
-from src.wheel.slip_detection import WheelSlipDetector
 
 
 class PrototypeTests(unittest.TestCase):
@@ -38,24 +40,10 @@ class PrototypeTests(unittest.TestCase):
         self.assertEqual(config.evaluation.reference_fix_state, 4)
         self.assertGreater(config.imu.gyro_std_rad_s, 0.0)
         self.assertGreater(config.wheel.speed_nis_threshold, 0.0)
+        self.assertGreater(config.adaptation.turn_yaw_rate_threshold_rad_s, 0.0)
         self.assertGreater(config.visual_odometry.min_matches, 0)
         self.assertLessEqual(config.visual_odometry.min_fusion_coverage, 1.0)
         self.assertGreater(config.lidar_odometry.voxel_m, 0.0)
-
-    def test_slip_detector_debounces_disagreement(self) -> None:
-        detector = WheelSlipDetector(
-            yaw_threshold_rad_s=0.3,
-            accel_threshold_m_s2=2.0,
-            enter_count=2,
-            exit_count=2,
-        )
-        imu = ImuSample(0, 0.0, 0.0)
-        bad = WheelMeasurement(0, 10.0, 1.0)
-        good = WheelMeasurement(0, 10.0, 0.0)
-        self.assertFalse(detector.update(bad, imu, 0.0).active)
-        self.assertTrue(detector.update(bad, imu, 0.0).active)
-        self.assertTrue(detector.update(good, imu, 0.0).active)
-        self.assertFalse(detector.update(good, imu, 0.0).active)
 
     def test_vrs_reader_uses_utm_and_fix_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -105,6 +93,14 @@ class PrototypeTests(unittest.TestCase):
             states, scaled, valid_fix_state=4, tolerance_ns=5_000_000
         )
         self.assertGreater(scaled_result.rmse_m, 0.5)
+        segmented = replace(
+            result,
+            timestamp_ns=np.array((0, 1_000_000_000, 10_000_000_000, 11_000_000_000)),
+        )
+        segments = evaluate_rtk_segments(
+            segmented, max_gap_ns=1_500_000_000, min_epochs=2
+        )
+        self.assertEqual([segment.epochs for segment in segments], [2, 2])
 
     def test_imu_columns_are_gyro_z_and_accel_x(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -195,6 +191,30 @@ class PrototypeTests(unittest.TestCase):
         self.assertTrue(filter_.last_relative_yaw_accepted)
         self.assertGreater(filter_.x[4], 0.0)
 
+    def test_wheel_noise_adaptation_separates_motion_regimes(self) -> None:
+        config = load_config(Path("config/default.json"))
+        filter_ = VehicleEKF(config)
+        filter_.predict(ImuSample(0, 0.0, 0.0))
+        filter_.update_wheel(WheelMeasurement(0, 1.0, 0.0), use_yaw_rate=True)
+        self.assertEqual(filter_.motion_regime, "straight")
+        self.assertEqual(
+            filter_.last_yaw_noise_scale,
+            config.adaptation.straight_yaw_scale,
+        )
+        filter_.predict(ImuSample(10_000_000, 0.3, 0.0))
+        filter_.update_wheel(
+            WheelMeasurement(20_000_000, 1.0, 0.3), use_yaw_rate=True
+        )
+        self.assertEqual(filter_.motion_regime, "turning")
+        self.assertEqual(
+            filter_.last_yaw_noise_scale,
+            config.adaptation.turn_yaw_scale,
+        )
+        self.assertEqual(
+            filter_.last_bias_walk_scale,
+            config.adaptation.turn_bias_walk_scale,
+        )
+
     def test_relative_pose_updates_position_and_yaw(self) -> None:
         config = load_config(Path("config/default.json"))
         filter_ = VehicleEKF(config)
@@ -217,8 +237,6 @@ class PrototypeTests(unittest.TestCase):
         self.assertGreater(result.yaw_rad, 0.01)
 
     def test_lidar_rigid_fit_recovers_planar_transform(self) -> None:
-        import numpy as np
-
         source = np.array(((0.0, 0.0), (2.0, 0.0), (0.0, 1.0), (2.0, 2.0)))
         yaw = 0.2
         rotation_expected = np.array(
@@ -229,6 +247,17 @@ class PrototypeTests(unittest.TestCase):
         rotation, translation = rigid_fit_2d(source, target)
         np.testing.assert_allclose(rotation, rotation_expected, atol=1e-12)
         np.testing.assert_allclose(translation, translation_expected, atol=1e-12)
+
+    def test_lidar_deskew_compensates_scan_time_motion(self) -> None:
+        points = np.array(((10.0, 0.0), (10.0, 0.0)))
+        deskewed = deskew_points_2d(
+            points,
+            speed_m_s=2.0,
+            yaw_rate_rad_s=0.0,
+            scan_period_s=0.1,
+        )
+        np.testing.assert_allclose(deskewed[:, 0], (9.9, 10.0), atol=1e-12)
+        np.testing.assert_allclose(deskewed[:, 1], 0.0, atol=1e-12)
 
 
 if __name__ == "__main__":

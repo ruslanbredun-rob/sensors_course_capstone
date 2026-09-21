@@ -38,6 +38,59 @@ class PositionEvaluation:
     start_alignment_baseline_m: float
 
 
+@dataclass(frozen=True)
+class RtkSegmentEvaluation:
+    segment_id: int
+    start_timestamp_ns: int
+    end_timestamp_ns: int
+    epochs: int
+    duration_s: float
+    global_rmse_m: float
+    initial_pose_rmse_m: float
+    global_final_error_m: float
+    initial_pose_final_error_m: float
+
+
+def evaluate_rtk_segments(
+    result: PositionEvaluation,
+    *,
+    max_gap_ns: int,
+    min_epochs: int,
+) -> list[RtkSegmentEvaluation]:
+    """Summarize errors on continuous matched RTK intervals."""
+    if max_gap_ns <= 0 or min_epochs < 2:
+        raise ValueError("Invalid RTK segment thresholds")
+    boundaries = [0]
+    boundaries.extend(
+        int(index + 1)
+        for index, gap in enumerate(np.diff(result.timestamp_ns))
+        if gap > max_gap_ns
+    )
+    boundaries.append(len(result.timestamp_ns))
+    segments: list[RtkSegmentEvaluation] = []
+    for start, end in zip(boundaries, boundaries[1:]):
+        if end - start < min_epochs:
+            continue
+        global_error = result.error_m[start:end]
+        initial_error = result.start_error_m[start:end]
+        segments.append(
+            RtkSegmentEvaluation(
+                segment_id=len(segments) + 1,
+                start_timestamp_ns=int(result.timestamp_ns[start]),
+                end_timestamp_ns=int(result.timestamp_ns[end - 1]),
+                epochs=end - start,
+                duration_s=float(
+                    (result.timestamp_ns[end - 1] - result.timestamp_ns[start]) * 1e-9
+                ),
+                global_rmse_m=float(np.sqrt(np.mean(global_error**2))),
+                initial_pose_rmse_m=float(np.sqrt(np.mean(initial_error**2))),
+                global_final_error_m=float(global_error[-1]),
+                initial_pose_final_error_m=float(initial_error[-1]),
+            )
+        )
+    return segments
+
+
 def _initial_pose_alignment(
     estimated_xy: np.ndarray,
     reference_xy: np.ndarray,

@@ -70,30 +70,3 @@ def wheel_measurements(
                 right_speed,
             )
         previous = sample
-
-
-def inject_right_wheel_scale_fault(
-    measurements: Iterable[WheelMeasurement],
-    *,
-    wheel_base_m: float,
-    start_ns: int,
-    end_ns: int,
-    scale: float,
-) -> Iterator[WheelMeasurement]:
-    """Scale the right wheel in a known interval for slip-detector evaluation."""
-    if wheel_base_m <= 0 or scale <= 0 or end_ns <= start_ns:
-        raise ValueError("Invalid injected wheel fault parameters")
-    for measurement in measurements:
-        if start_ns <= measurement.timestamp_ns < end_ns:
-            right = measurement.right_speed_m_s * scale
-            left = measurement.left_speed_m_s
-            yield WheelMeasurement(
-                measurement.timestamp_ns,
-                0.5 * (left + right),
-                (right - left) / wheel_base_m,
-                left,
-                right,
-                True,
-            )
-        else:
-            yield measurement

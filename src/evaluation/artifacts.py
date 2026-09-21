@@ -6,12 +6,11 @@ import csv
 from pathlib import Path
 
 from src.common.config import RunConfig
-from src.evaluation.metrics import PositionEvaluation
+from src.evaluation.metrics import PositionEvaluation, evaluate_rtk_segments
 from src.evaluation.visualization import (
     save_comparison_plots,
     save_consistency_plot,
     save_metrics_table,
-    save_slip_plot,
     save_validation_plot,
 )
 
@@ -95,6 +94,51 @@ def write_validation_pairs_csv(
                 )
 
 
+def write_rtk_segment_metrics_csv(
+    evaluations: dict[str, PositionEvaluation],
+    output_path: Path,
+    *,
+    max_gap_ns: int,
+    min_epochs: int,
+) -> None:
+    with output_path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream, lineterminator="\n")
+        writer.writerow(
+            (
+                "configuration",
+                "segment_id",
+                "start_timestamp_ns",
+                "end_timestamp_ns",
+                "epochs",
+                "duration_s",
+                "global_rmse_m",
+                "initial_pose_rmse_m",
+                "global_final_error_m",
+                "initial_pose_final_error_m",
+            )
+        )
+        for name, result in evaluations.items():
+            for segment in evaluate_rtk_segments(
+                result,
+                max_gap_ns=max_gap_ns,
+                min_epochs=min_epochs,
+            ):
+                writer.writerow(
+                    (
+                        name,
+                        segment.segment_id,
+                        segment.start_timestamp_ns,
+                        segment.end_timestamp_ns,
+                        segment.epochs,
+                        f"{segment.duration_s:.3f}",
+                        f"{segment.global_rmse_m:.6f}",
+                        f"{segment.initial_pose_rmse_m:.6f}",
+                        f"{segment.global_final_error_m:.6f}",
+                        f"{segment.initial_pose_final_error_m:.6f}",
+                    )
+                )
+
+
 def _save_result_plots(
     evaluations: dict[str, PositionEvaluation], output: Path
 ) -> None:
@@ -111,7 +155,7 @@ def _save_diagnostic_plots(
 ) -> None:
     mode = next(
         name
-        for name in ("full", "lidar", "visual", "slip", "base")
+        for name in ("full", "lidar", "visual", "base")
         if name in evaluations
     )
     output = config.general.output
@@ -123,7 +167,6 @@ def _save_diagnostic_plots(
         relative_pose_threshold=config.fusion.relative_pose_nis_threshold,
         max_covariance_scale=config.fusion.relative_pose_max_covariance_scale,
     )
-    save_slip_plot(output, mode)
 
 
 def export_validation_artifacts(
@@ -135,5 +178,11 @@ def export_validation_artifacts(
     output = config.general.output
     write_metrics_csv(evaluations, output / "comparison_metrics.csv")
     write_validation_pairs_csv(evaluations, output / "validation_pairs.csv")
+    write_rtk_segment_metrics_csv(
+        evaluations,
+        output / "rtk_segment_metrics.csv",
+        max_gap_ns=config.evaluation.segment_max_gap_ns,
+        min_epochs=config.evaluation.segment_min_epochs,
+    )
     _save_result_plots(evaluations, output)
     _save_diagnostic_plots(config, evaluations)
