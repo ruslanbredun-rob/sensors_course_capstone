@@ -1,4 +1,4 @@
-"""Quality-gated metric stereo visual odometry for the urban35 sequence."""
+"""Quality-gated metric stereo visual odometry for Complex Urban sequences."""
 
 from __future__ import annotations
 

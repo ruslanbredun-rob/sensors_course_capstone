@@ -22,5 +22,6 @@ __pycache__/
 /results/**/estimated_state*.csv
 /results/**/diagnostics*.csv
 /results/**/visual_odometry.csv
+/results/**/vio_odometry.csv
 /results/**/lidar_odometry.csv
 /results/**/validation_pairs.csv

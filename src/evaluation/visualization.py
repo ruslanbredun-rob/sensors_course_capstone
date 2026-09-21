@@ -17,6 +17,7 @@ from src.evaluation.metrics import PositionEvaluation
 DISPLAY_NAMES = {
     "base": "INS baseline (IMU + wheel)",
     "visual": "Baseline + stereo VO",
+    "vio": "Baseline + simplified VIO",
     "lidar": "Baseline + LiDAR (no camera)",
     "full": "Selected fusion (VO/LiDAR health gates)",
 }

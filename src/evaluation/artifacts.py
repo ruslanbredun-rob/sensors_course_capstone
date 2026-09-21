@@ -155,7 +155,7 @@ def _save_diagnostic_plots(
 ) -> None:
     mode = next(
         name
-        for name in ("full", "lidar", "visual", "base")
+        for name in ("full", "lidar", "vio", "visual", "base")
         if name in evaluations
     )
     output = config.general.output

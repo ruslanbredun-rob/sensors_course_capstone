@@ -11,6 +11,11 @@ from src.camera.visual_odometry import (
     compute_visual_odometry,
     read_visual_odometry,
 )
+from src.camera.vio import (
+    VioOdometryResult,
+    compute_vio_odometry,
+    read_vio_odometry,
+)
 from src.common.config import RunConfig
 from src.common.models import (
     Estimate,
@@ -61,7 +66,7 @@ def _require_inputs(dataset: Path, *, mode: str, validate: bool) -> None:
                 dataset / "calibration" / "Vehicle2VRS.txt",
             )
         )
-    if mode in ("visual", "full", "all"):
+    if mode in ("visual", "vio", "full", "all"):
         required.extend(
             (
                 dataset / "calibration" / "left.yaml",
@@ -235,7 +240,9 @@ def _run_filter(
                 # independent. In the combined mode, prefer the substantially
                 # lower-noise LiDAR increment and use VO only across LO gaps.
                 use_correction = not (
-                    name == "full" and event.source == "visual" and lidar_recent
+                    name == "full"
+                    and event.source in ("visual", "vio")
+                    and lidar_recent
                 )
                 if use_correction:
                     estimate = estimator.update_relative_pose(event)
@@ -361,7 +368,7 @@ def run(
     wheels = _load_wheels(config)
     visual: VisualOdometryResult | None = None
     visual_ready = False
-    if mode in ("visual", "full", "all"):
+    if mode in ("visual", "vio", "full", "all"):
         visual = (
             read_visual_odometry(config)
             if reuse_frontends
@@ -376,6 +383,26 @@ def run(
             f"visual frontend: accepted={len(visual.motions)}/"
             f"{visual.attempted_pairs}, rejected={visual.rejected_pairs}, "
             f"fusion={'enabled' if visual_ready else 'disabled (low coverage)'}"
+        )
+    vio: VioOdometryResult | None = None
+    vio_ready = False
+    if mode in ("vio", "full", "all"):
+        assert visual is not None
+        vio = (
+            read_vio_odometry(config, visual)
+            if reuse_frontends
+            and (config.general.output / "vio_odometry.csv").exists()
+            else compute_vio_odometry(config, imu, visual)
+        )
+        vio_ready = _frontend_ready(
+            len(vio.motions),
+            vio.attempted_pairs,
+            config.vio.min_fusion_coverage,
+        )
+        print(
+            f"vio frontend: accepted={len(vio.motions)}/"
+            f"{vio.attempted_pairs}, rejected={vio.rejected_pairs}, "
+            f"fusion={'enabled' if vio_ready else 'disabled (low coverage)'}"
         )
     lidar: LidarOdometryResult | None = None
     lidar_ready = False
@@ -412,7 +439,7 @@ def run(
                 f"< {config.lidar_odometry.min_turning_fraction:.1%}"
             )
     modes = (
-        ["base", "visual", "lidar", "full"]
+        ["base", "visual", "vio", "lidar", "full"]
         if mode == "all"
         else [mode]
     )
@@ -421,8 +448,12 @@ def run(
         relative_streams = []
         relative_epoch_streams = []
         if name in ("visual", "full") and visual and visual_ready:
-            relative_streams.append(visual.motions)
-            relative_epoch_streams.append(visual.epochs)
+            if name == "visual" or not vio_ready:
+                relative_streams.append(visual.motions)
+                relative_epoch_streams.append(visual.epochs)
+        if name in ("vio", "full") and vio and vio_ready:
+            relative_streams.append(vio.motions)
+            relative_epoch_streams.append(vio.epochs)
         if name in ("lidar", "full") and lidar and lidar_ready:
             relative_streams.append(lidar.motions)
             relative_epoch_streams.append(lidar.epochs)
