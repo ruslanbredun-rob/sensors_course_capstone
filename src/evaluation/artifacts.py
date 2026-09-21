@@ -33,6 +33,8 @@ def write_metrics_csv(
                 "start_median_m",
                 "start_p95_m",
                 "start_final_error_m",
+                "start_alignment_yaw_deg",
+                "start_alignment_baseline_m",
             )
         )
         for name, result in evaluations.items():
@@ -48,6 +50,8 @@ def write_metrics_csv(
                     f"{result.start_median_m:.6f}",
                     f"{result.start_p95_m:.6f}",
                     f"{result.start_final_error_m:.6f}",
+                    f"{result.start_alignment_yaw_rad * 180.0 / 3.141592653589793:.6f}",
+                    f"{result.start_alignment_baseline_m:.6f}",
                 )
             )
 

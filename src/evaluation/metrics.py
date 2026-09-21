@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from bisect import bisect_left
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -33,6 +34,50 @@ class PositionEvaluation:
     start_p95_m: float
     start_final_error_m: float
     alignment_yaw_rad: float
+    start_alignment_yaw_rad: float
+    start_alignment_baseline_m: float
+
+
+def _initial_pose_alignment(
+    estimated_xy: np.ndarray,
+    reference_xy: np.ndarray,
+    *,
+    target_baseline_m: float = 20.0,
+) -> tuple[np.ndarray, float, float]:
+    """Align origin and initial direction using the first stable motion segment."""
+    estimated_offset = estimated_xy - estimated_xy[0]
+    reference_offset = reference_xy - reference_xy[0]
+    estimated_distance = np.linalg.norm(estimated_offset, axis=1)
+    reference_distance = np.linalg.norm(reference_offset, axis=1)
+    maximum_reference_distance = float(np.max(reference_distance))
+    if maximum_reference_distance <= 0.0:
+        raise ValueError("Reference trajectory has insufficient spatial extent")
+
+    # Twenty metres suppresses RTK jitter while the vehicle is stationary. For
+    # short synthetic/test trajectories, use one quarter of their extent.
+    requested_baseline = min(target_baseline_m, 0.25 * maximum_reference_distance)
+    minimum_estimated_distance = max(0.1, 0.1 * requested_baseline)
+    candidates = np.flatnonzero(
+        (reference_distance >= requested_baseline)
+        & (estimated_distance >= minimum_estimated_distance)
+    )
+    if not len(candidates):
+        raise ValueError("No stable initial-motion segment is available for alignment")
+    heading_index = int(candidates[0])
+    estimated_heading = math.atan2(
+        estimated_offset[heading_index, 1], estimated_offset[heading_index, 0]
+    )
+    reference_heading = math.atan2(
+        reference_offset[heading_index, 1], reference_offset[heading_index, 0]
+    )
+    yaw = math.atan2(
+        math.sin(reference_heading - estimated_heading),
+        math.cos(reference_heading - estimated_heading),
+    )
+    cosine, sine = math.cos(yaw), math.sin(yaw)
+    rotation = np.array(((cosine, sine), (-sine, cosine)))
+    aligned_xy = estimated_offset @ rotation + reference_xy[0]
+    return aligned_xy, yaw, float(reference_distance[heading_index])
 
 
 def evaluate_position(
@@ -90,11 +135,16 @@ def evaluate_position(
     rotation = u @ correction @ vt
     aligned_xy = centered_estimate @ rotation + reference_center
     error = np.linalg.norm(aligned_xy - reference_xy, axis=1)
-    # Keep the globally optimal yaw but anchor translation at the first RTK
-    # epoch. This view makes accumulated drift visible and guarantees that the
-    # plotted trajectories start at the same point.
-    start_aligned_xy = (
-        (estimated_xy - estimated_xy[0]) @ rotation + reference_xy[0]
+    # Align the initial pose independently of the global ATE fit. The first VRS
+    # samples can be stationary, so estimate heading over a stable motion
+    # baseline rather than from the noisy first pair of positions.
+    (
+        start_aligned_xy,
+        start_alignment_yaw,
+        start_alignment_baseline,
+    ) = _initial_pose_alignment(
+        estimated_xy,
+        reference_xy,
     )
     start_error = np.linalg.norm(start_aligned_xy - reference_xy, axis=1)
     return PositionEvaluation(
@@ -116,6 +166,8 @@ def evaluate_position(
         start_p95_m=float(np.percentile(start_error, 95)),
         start_final_error_m=float(start_error[-1]),
         alignment_yaw_rad=float(np.arctan2(rotation[0, 1], rotation[0, 0])),
+        start_alignment_yaw_rad=start_alignment_yaw,
+        start_alignment_baseline_m=start_alignment_baseline,
     )
 
 

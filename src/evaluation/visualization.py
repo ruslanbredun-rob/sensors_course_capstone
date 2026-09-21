@@ -38,7 +38,7 @@ def save_validation_plot(result: PositionEvaluation, output_path: Path) -> None:
 
     figure, axes = plt.subplots(1, 2, figsize=(11, 4.5))
     axes[0].plot(reference[:, 0], reference[:, 1], label="VRS-GPS RTK", linewidth=2)
-    axes[0].plot(estimate[:, 0], estimate[:, 1], label="Best fused, start anchored")
+    axes[0].plot(estimate[:, 0], estimate[:, 1], label="Best fused, initial pose aligned")
     axes[0].set_xlabel("UTM east offset (m)")
     axes[0].set_ylabel("UTM north offset (m)")
     axes[0].set_aspect("equal", adjustable="box")
@@ -105,7 +105,7 @@ def _save_trajectory_comparison(
     )
     axis.set(xlabel="UTM east offset (m)", ylabel="UTM north offset (m)")
     axis.set_aspect("equal", adjustable="box")
-    axis.set_title("All trajectories anchored at the common start; yaw from SE(2) fit")
+    axis.set_title("All trajectories aligned to the common initial pose (20 m heading)")
     axis.grid(True, alpha=0.3)
     axis.legend(fontsize=8)
     _save_figure(figure, output_path)
@@ -125,7 +125,7 @@ def _save_error_comparison(
         )
     axis.set(
         xlabel="Time since first matched RTK fix (s)",
-        ylabel="Start-anchored 2D error (m)",
+        ylabel="Initial-pose-aligned 2D error (m)",
     )
     axis.grid(True, alpha=0.3)
     axis.legend(fontsize=8)
@@ -145,7 +145,7 @@ def _save_rmse_comparison(
         positions - width / 2, global_values, width, label="Global SE(2) ATE"
     )
     start_bars = axis.bar(
-        positions + width / 2, start_values, width, label="Start anchored"
+        positions + width / 2, start_values, width, label="Initial pose aligned"
     )
     axis.bar_label(global_bars, fmt="%.1f", padding=3, fontsize=8)
     axis.bar_label(start_bars, fmt="%.1f", padding=3, fontsize=8)
@@ -312,7 +312,7 @@ def save_metrics_table(
         colLabels=(
             "Configuration",
             "Global RMSE (m)",
-            "Start RMSE (m)",
+            "Initial-pose RMSE (m)",
             "Median (m)",
             "P95 (m)",
             "vs E1",

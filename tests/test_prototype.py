@@ -90,6 +90,8 @@ class PrototypeTests(unittest.TestCase):
         self.assertEqual((result.valid_fix_epochs, result.matched_epochs), (4, 4))
         self.assertLess(result.rmse_m, 1e-10)
         self.assertLess(result.start_error_m[0], 1e-10)
+        self.assertLess(max(result.start_error_m), 1e-10)
+        self.assertGreater(result.start_alignment_baseline_m, 0.0)
         scaled = [
             PositionReference(
                 sample.timestamp_ns,
