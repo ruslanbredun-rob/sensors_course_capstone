@@ -9,7 +9,7 @@
 | `vio` | Sliding-window nonlinear optimization | IMU + wheels + stereo features |
 | `gps` | Planar EKF | IMU + wheels + commercial GPS |
 | `gps_dropout` | Planar EKF | GPS вимкнено на 20–40% та 50–70% шляху |
-| `gps_sparse` | Planar EKF | кожне десяте commercial GPS measurement |
+| `gps_sparse` | VIO trajectory correction | IMU + wheels + camera + кожне 30-те GPS measurement |
 | `all` | Запускає шість конфігурацій для порівняння | усі перелічені вище |
 
 VIO є окремою траєкторією. IMU та колеса утворюють motion backbone, а camera
@@ -81,7 +81,8 @@ VRS. `Vehicle2GPS.txt` компенсує antenna lever arm. Position update з�
 adaptive covariance inflation за NIS.
 
 Dropout progress визначається за накопиченою абсолютною wheel distance. Sparse
-режим детерміновано залишає кожне десяте GPS measurement.
+режим бере VIO + wheel trajectory як backbone і оцінює повільну SE(2) correction
+за кожним 30-м GPS measurement.
 
 ## Оцінка
 

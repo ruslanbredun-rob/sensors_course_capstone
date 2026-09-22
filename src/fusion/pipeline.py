@@ -35,6 +35,7 @@ from src.evaluation.metrics import PositionEvaluation, evaluate_position
 from src.fusion.ekf import VehicleEKF
 from src.gps.reader import read_gps
 from src.gps.scenarios import gps_scenarios
+from src.gps.trajectory_fusion import fuse_sparse_gps_with_vio
 from src.imu.reader import read_imu
 from src.wheel.odometry import (
     wheel_measurements,
@@ -83,7 +84,7 @@ def _require_inputs(dataset: Path, *, mode: str, validate: bool) -> None:
                 dataset / "calibration" / "Vehicle2VRS.txt",
             )
         )
-    if mode in ("visual", "vio", "all"):
+    if mode in ("visual", "vio", "gps_sparse", "all"):
         required.extend(
             (
                 dataset / "calibration" / "left.yaml",
@@ -433,7 +434,7 @@ def run(
             f"fusion={'enabled' if visual_ready else 'disabled (low coverage)'}"
         )
     vio: VioTrajectoryResult | None = None
-    if mode in ("vio", "all"):
+    if mode in ("vio", "gps_sparse", "all"):
         vio = (
             read_vio_trajectory(config)
             if reuse_frontends and (config.general.output / "vio_trajectory.csv").exists()
@@ -446,9 +447,9 @@ def run(
         )
 
     filter_modes = (
-        ["base", "visual", "gps", "gps_dropout", "gps_sparse"]
+        ["base", "visual", "gps", "gps_dropout"]
         if mode == "all"
-        else [mode]
+        else ([] if mode in ("vio", "gps_sparse") else [mode])
     )
     results: list[ExperimentResult] = []
     for name in filter_modes:
@@ -472,7 +473,7 @@ def run(
                 max_events=max_events,
             )
         )
-    if vio is not None:
+    if vio is not None and mode in ("vio", "all"):
         if not vio.states:
             raise ValueError("VIO produced no states")
         _write_estimates(config.general.output / "estimated_state_vio.csv", vio.states)
@@ -485,6 +486,33 @@ def run(
                 relative_updates=vio.visual_factors,
                 rejected_relative_updates=vio.rejected_pairs,
                 available_relative_updates=vio.attempted_pairs,
+            )
+        )
+    if mode in ("gps_sparse", "all"):
+        if vio is None or gps_antenna_offset_xy_m is None:
+            raise ValueError("Sparse GPS mode requires VIO and GPS calibration")
+        sparse = fuse_sparse_gps_with_vio(
+            config,
+            vio.states,
+            gps_streams["gps_sparse"],
+            gps_antenna_offset_xy_m,
+        )
+        _write_estimates(
+            config.general.output / "estimated_state_gps_sparse.csv",
+            sparse.states,
+        )
+        results.append(
+            ExperimentResult(
+                "gps_sparse",
+                sparse.states,
+                wheel_updates=len(wheels),
+                rejected_wheel_updates=0,
+                relative_updates=vio.visual_factors,
+                rejected_relative_updates=vio.rejected_pairs,
+                available_relative_updates=vio.attempted_pairs,
+                gps_updates=sparse.updates,
+                rejected_gps_updates=sparse.rejected_updates,
+                available_gps_updates=sparse.available_updates,
             )
         )
     if mode == "all":

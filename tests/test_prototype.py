@@ -33,6 +33,7 @@ from src.evaluation.metrics import evaluate_position, evaluate_rtk_segments
 from src.fusion.ekf import VehicleEKF
 from src.gps.reader import wgs84_to_utm
 from src.gps.scenarios import gps_scenarios
+from src.gps.trajectory_fusion import fuse_sparse_gps_with_vio
 from src.imu.reader import read_imu
 from src.wheel.odometry import wheel_measurements
 
@@ -49,7 +50,7 @@ class PrototypeTests(unittest.TestCase):
         self.assertEqual(config.evaluation.reference_fix_state, 4)
         self.assertGreater(config.imu.gyro_std_rad_s, 0.0)
         self.assertGreater(config.wheel.speed_nis_threshold, 0.0)
-        self.assertEqual(config.gps.sparse_factor, 10)
+        self.assertEqual(config.gps.sparse_factor, 30)
         self.assertGreater(config.visual_odometry.min_matches, 0)
         self.assertLessEqual(config.visual_odometry.min_fusion_coverage, 1.0)
         self.assertGreater(config.vio.window_size, 1)
@@ -82,7 +83,39 @@ class PrototypeTests(unittest.TestCase):
         scenarios = gps_scenarios(gps, wheels, config.gps)
         self.assertEqual(len(scenarios["gps"]), 101)
         self.assertEqual(len(scenarios["gps_dropout"]), 61)
-        self.assertEqual(len(scenarios["gps_sparse"]), 11)
+        self.assertEqual(len(scenarios["gps_sparse"]), 4)
+
+    def test_sparse_gps_corrector_uses_vio_trajectory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = load_config(Path("config/default.json"))
+            config = replace(
+                config,
+                general=replace(config.general, output=Path(directory)),
+            )
+            states = [
+                Estimate(i * 1_000_000_000, float(i), 0.0, 0.0, 1.0)
+                for i in range(101)
+            ]
+            gps = [
+                GpsMeasurement(
+                    i * 1_000_000_000,
+                    1_000.0,
+                    2_000.0 + i,
+                    4.0,
+                    0.0,
+                    4.0,
+                )
+                for i in range(0, 101, 10)
+            ]
+            result = fuse_sparse_gps_with_vio(
+                config,
+                states,
+                gps,
+                np.zeros(2),
+            )
+            self.assertEqual(len(result.states), len(states))
+            self.assertGreater(result.updates, 0)
+            self.assertAlmostEqual(result.states[-1].x_m, 100.0, delta=0.1)
 
     def test_se2_validation_excludes_float_fixes_and_never_fits_scale(self) -> None:
         xy = [(0, 0), (1, 0), (1, 1), (2, 1), (2, 2)]

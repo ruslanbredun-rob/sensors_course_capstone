@@ -20,7 +20,7 @@ DISPLAY_NAMES = {
     "vio": "Stereo VIO + wheels",
     "gps": "Commercial GPS",
     "gps_dropout": "GPS dropout (20–40%, 50–70%)",
-    "gps_sparse": "Commercial GPS at 1/10 rate",
+    "gps_sparse": "VIO + wheels + GPS at 1/30 rate",
 }
 
 

@@ -49,6 +49,8 @@ class GpsConfig:
     position_nis_threshold: float
     max_covariance_scale: float
     sparse_factor: int
+    trajectory_translation_walk_m_sqrt_s: float
+    trajectory_yaw_walk_rad_sqrt_s: float
     dropout_ranges: tuple[tuple[float, float], ...]
 
 
@@ -179,6 +181,8 @@ def load_config(
             "position_nis_threshold",
             "max_covariance_scale",
             "sparse_factor",
+            "trajectory_translation_walk_m_sqrt_s",
+            "trajectory_yaw_walk_rad_sqrt_s",
         ),
         config_path,
     )
@@ -278,6 +282,12 @@ def load_config(
             position_nis_threshold=float(gps["position_nis_threshold"]),
             max_covariance_scale=float(gps["max_covariance_scale"]),
             sparse_factor=int(gps["sparse_factor"]),
+            trajectory_translation_walk_m_sqrt_s=float(
+                gps["trajectory_translation_walk_m_sqrt_s"]
+            ),
+            trajectory_yaw_walk_rad_sqrt_s=float(
+                gps["trajectory_yaw_walk_rad_sqrt_s"]
+            ),
             dropout_ranges=dropout_ranges,
         ),
         visual_odometry=VisualOdometryConfig(

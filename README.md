@@ -8,7 +8,7 @@
 - `vio`: IMU + колеса + feature-level stereo VIO.
 - `gps`: IMU + колеса + всі commercial GPS measurements;
 - `gps_dropout`: GPS відсутній на 20–40% та 50–70% пройденого шляху;
-- `gps_sparse`: використовується кожне десяте GPS measurement.
+- `gps_sparse`: VIO + колеса коригуються кожним 30-м GPS measurement.
 
 Commercial `gps.csv` входить лише у три GPS режими. VRS-GPS ніколи не входить
 в estimator і використовується лише для оцінки готової траєкторії.

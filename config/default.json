@@ -27,7 +27,9 @@
     "min_position_std_m": 2.0,
     "position_nis_threshold": 9.21,
     "max_covariance_scale": 100.0,
-    "sparse_factor": 10,
+    "sparse_factor": 30,
+    "trajectory_translation_walk_m_sqrt_s": 0.2,
+    "trajectory_yaw_walk_rad_sqrt_s": 0.002,
     "dropout_ranges": [[0.2, 0.4], [0.5, 0.7]]
   },
   "visual_odometry": {
