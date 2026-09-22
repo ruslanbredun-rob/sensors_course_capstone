@@ -97,6 +97,12 @@ commercial GPS; незалежний VRS-GPS лишається ground truth.
 Global ATE застосовує один rigid SE(2) alignment без scale. Initial-pose view
 вирівнює спільну стартову точку й напрям.
 
+Trajectory screenshots використовують Global SE(2)-aligned estimates, тому
+відстань між кольоровою estimate та пунктирною VRS-GPS reference відповідає ATE
+у легенді. Це offline rigid alignment за всією траєкторією. Initial-pose RMSE
+наводиться окремо в таблицях і на RMSE comparison chart, щоб показати
+накопичений drift від старту.
+
 ## Межі реалізації
 
 Це feature-level VIO для planar vehicle model. Воно вже не стискає camera data

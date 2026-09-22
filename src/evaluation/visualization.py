@@ -82,7 +82,7 @@ def _save_trajectory_comparison(
         if name not in evaluations:
             continue
         result = evaluations[name]
-        estimate = result.start_aligned_xy_m - origin
+        estimate = result.aligned_xy_m - origin
         axis.plot(
             estimate[:, 0],
             estimate[:, 1],
@@ -101,10 +101,10 @@ def _save_trajectory_comparison(
         edgecolor="white",
         linewidth=0.9,
         zorder=10,
-        label="Common start",
+        label="VRS-GPS start",
     )
     axis.annotate(
-        "start (0, 0)",
+        "VRS start (0, 0)",
         (0.0, 0.0),
         xytext=(10, 10),
         textcoords="offset points",
@@ -174,19 +174,19 @@ def save_comparison_plots(
         evaluations,
         ("gps",),
         output_directory / "trajectory_gps_reference.png",
-        "GPS-aided reference configuration vs VRS-GPS ground truth",
+        "GPS reference vs VRS-GPS after Global SE(2) alignment",
     )
     _save_trajectory_comparison(
         evaluations,
         ("vio",),
         output_directory / "trajectory_vio.png",
-        "GPS-denied VIO vs VRS-GPS ground truth",
+        "GPS-denied VIO vs VRS-GPS after Global SE(2) alignment",
     )
     _save_trajectory_comparison(
         evaluations,
         ("gps_dropout", "gps_sparse"),
         output_directory / "trajectory_degraded_gps.png",
-        "Degraded GPS availability vs VRS-GPS ground truth",
+        "Degraded GPS modes after Global SE(2) alignment",
     )
     _save_error_comparison(evaluations, output_directory / "error_over_time.png")
     _save_rmse_comparison(evaluations, output_directory / "rmse_comparison.png")

@@ -7,6 +7,18 @@ VRS-GPS із `vrs_gps.csv` не входить у жоден estimator і вик
 ground truth. Primary metric — 2D ATE RMSE після rigid SE(2) alignment без
 scale fit. Initial-pose RMSE додатково показує накопичення помилки напряму.
 
+На trajectory графіках пунктир показує реальну VRS-GPS RTK reference
+траєкторію. Кольорова estimate траєкторія показана після Global SE(2) alignment,
+тобто після одного оптимального повороту та зміщення за всіма matched reference
+точками. Scale не змінюється. Саме для цього вирівнювання в легенді наведено
+`ATE`. Воно описує схожість форми траєкторії після offline суміщення і не є
+точністю online локалізації.
+
+Initial-pose RMSE є суворішим для оцінки accumulated drift: суміщаються лише
+стартова точка та початковий напрям, після чого траєкторія більше не
+підлаштовується під reference. Тому, наприклад, `urban35 VIO` має Global ATE
+4.63 м, але Initial-pose RMSE 60.37 м.
+
 Порівнюються чотири конфігурації:
 
 1. **GPS reference** — IMU + wheels + усі commercial GPS measurements.
