@@ -28,6 +28,8 @@ gyro bias та accelerometer bias.
 | GPS dropout | 1.825 | 6.557 | 1.145 |
 | Sparse GPS, 30 с | 5.110 | 17.464 | 12.303 |
 
+![RMSE comparison urban35](urban35/screenshots/rmse_comparison.png)
+
 ![GPS reference urban35](urban35/screenshots/trajectory_gps_reference.png)
 
 ![VIO urban35](urban35/screenshots/trajectory_vio.png)
@@ -49,6 +51,8 @@ RMSE зменшується з 60.37 до 17.46 м: рідкі глобальн�
 | GPS dropout | 13.570 | 25.195 | 3.409 |
 | Sparse GPS, 30 с | 3.823 | **22.276** | 10.886 |
 
+![RMSE comparison urban33](urban33/screenshots/rmse_comparison.png)
+
 ![GPS reference urban33](urban33/screenshots/trajectory_gps_reference.png)
 
 ![VIO urban33](urban33/screenshots/trajectory_vio.png)
@@ -69,6 +73,8 @@ RMSE зменшується з 60.37 до 17.46 м: рідкі глобальн�
 | VIO | 181.380 | 392.598 | 150.178 |
 | GPS dropout | 169.768 | 284.720 | 128.727 |
 | Sparse GPS, 30 с | 40.789 | 43.262 | 95.191 |
+
+![RMSE comparison urban39](urban39/screenshots/rmse_comparison.png)
 
 ![GPS reference urban39](urban39/screenshots/trajectory_gps_reference.png)
 
