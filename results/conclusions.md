@@ -31,6 +31,10 @@ Global SE(2) ATE у таблицях є додатковою оцінкою фо
 як position update і через Kalman cross-covariance коригує pose, velocity,
 gyro bias та accelerometer bias.
 
+Підсумковий консольний звіт із RMSE/ATE для всіх трьох маршрутів:
+
+![Console RMSE summary](screenshots/console_rmse_summary.png)
+
 ## `urban35`: короткий майже прямий маршрут
 
 | Конфігурація | Global RMSE, м | Initial-pose RMSE, м | Final error, м |
@@ -77,6 +81,12 @@ RMSE зменшується з 60.37 до 17.46 м: рідкі глобальн�
 лише на 1.34 м гірше за GPS reference. Регулярні рідкі поправки тут ефективніші
 за два довгі інтервали повної відсутності GPS.
 
+NIS diagnostics показує прийняті вимірювання та відхилені сплески innovation.
+Wheel speed переважно проходить gate, тоді як частина yaw-rate і VO updates
+відхиляється як несумісна з поточним станом та covariance фільтра.
+
+![NIS consistency urban33](urban33/screenshots/filter_consistency.png)
+
 ## `urban39`: найдовший і найскладніший маршрут
 
 | Конфігурація | Global RMSE, м | Initial-pose RMSE, м | Final error, м |
@@ -102,6 +112,21 @@ RMSE зменшується з 60.37 до 17.46 м: рідкі глобальн�
 недостатньо для точності рівня постійного GPS.
 
 ## Загальні висновки
+
+### Покращення відносно IMU + wheels baseline
+
+Додатне значення означає зменшення Global ATE RMSE. Від'ємне означає, що
+конфігурація погіршила baseline.
+
+| Sequence | Baseline RMSE, м | VIO | GPS dropout | Sparse GPS, 30 с |
+|---|---:|---:|---:|---:|
+| `urban35` | 4.153 | −11.4% | **+56.1%** | −23.1% |
+| `urban33` | 83.828 | +8.3% | +83.8% | **+95.4%** |
+| `urban39` | 188.456 | +3.8% | +9.9% | **+78.4%** |
+
+На короткому `urban35` найкращим degraded режимом є GPS dropout. На довших
+`urban33/39` регулярний GPS раз на 30 с значно ефективніший за чистий VIO та
+два довгі GPS outages.
 
 - Повний commercial GPS утримує global RMSE в межах 0.66–2.49 м на всіх
   маршрутах.

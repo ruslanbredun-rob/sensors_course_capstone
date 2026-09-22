@@ -1,0 +1,22 @@
+$ python -m src.main --mode all --validate --reuse-frontends ...
+
+[urban35] whole-trajectory evaluation
+gps          ATE RMSE =   0.657 m   initial-pose RMSE =   6.395 m
+base         ATE RMSE =   4.153 m   initial-pose RMSE =  52.034 m
+vio          ATE RMSE =   4.625 m   initial-pose RMSE =  60.370 m
+gps_dropout  ATE RMSE =   1.825 m   initial-pose RMSE =   6.557 m
+gps_sparse   ATE RMSE =   5.110 m   initial-pose RMSE =  17.464 m
+
+[urban33] whole-trajectory evaluation
+gps          ATE RMSE =   2.487 m   initial-pose RMSE =  21.277 m
+base         ATE RMSE =  83.828 m   initial-pose RMSE = 119.094 m
+vio          ATE RMSE =  76.907 m   initial-pose RMSE = 102.373 m
+gps_dropout  ATE RMSE =  13.570 m   initial-pose RMSE =  25.195 m
+gps_sparse   ATE RMSE =   3.823 m   initial-pose RMSE =  22.276 m
+
+[urban39] whole-trajectory evaluation
+gps          ATE RMSE =   2.442 m   initial-pose RMSE =   4.093 m
+base         ATE RMSE = 188.456 m   initial-pose RMSE = 397.401 m
+vio          ATE RMSE = 181.380 m   initial-pose RMSE = 392.598 m
+gps_dropout  ATE RMSE = 169.768 m   initial-pose RMSE = 284.720 m
+gps_sparse   ATE RMSE =  40.789 m   initial-pose RMSE =  43.262 m

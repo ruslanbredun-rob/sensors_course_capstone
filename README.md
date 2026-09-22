@@ -8,7 +8,7 @@ Complex Urban Dataset.
 
 | Mode | Сенсори та призначення |
 |---|---|
-| `gps` | IMU + wheels + усі commercial GPS; reference configuration |
+| `gps` | GPS + IMU + wheels; усі commercial GPS measurements |
 | `base` | IMU + wheels; базова GPS-denied одометрія |
 | `visual` | IMU + wheels + loosely coupled stereo VO |
 | `vio` | IMU + wheels + feature-level stereo VIO |
@@ -76,6 +76,17 @@ data/complex_urban/urban39/
 ```
 
 Детальніше: [data/README.md](data/README.md).
+
+Приблизний розмір уже розпакованих даних:
+
+| Sequence | Розмір на диску |
+|---|---:|
+| `urban35` | 5.5 GB |
+| `urban33` | 44 GB |
+| `urban39` | 64 GB |
+| **Разом** | **≈114 GB** |
+
+Розмір може трохи відрізнятися залежно від набору завантажених архівів.
 
 ## Запуск
 
@@ -188,7 +199,9 @@ Global SE(2) ATE залишається у таблицях і на RMSE bar cha
 - `screenshots/rmse_comparison.png`;
 - `screenshots/trajectory_gps_reference.png`;
 - `screenshots/trajectory_vio.png`;
-- `screenshots/trajectory_degraded_gps.png`.
+- `screenshots/trajectory_degraded_gps.png`;
+- `screenshots/filter_consistency.png` з NIS diagnostics;
+- `results/screenshots/console_rmse_summary.png` з підсумковим RMSE/ATE.
 
 Архітектура описана у [docs/architecture.md](docs/architecture.md) та
 [docs/vio_architecture.md](docs/vio_architecture.md).

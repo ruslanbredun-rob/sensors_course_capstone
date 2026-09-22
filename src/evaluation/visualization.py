@@ -15,7 +15,7 @@ from src.evaluation.metrics import PositionEvaluation
 
 
 DISPLAY_NAMES = {
-    "gps": "Reference config: GPS + IMU + wheels",
+    "gps": "GPS + IMU + wheels",
     "base": "IMU + wheels",
     "visual": "IMU + wheels + stereo VO",
     "vio": "IMU + wheels + stereo VIO",
