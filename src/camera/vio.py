@@ -19,7 +19,13 @@ from src.camera.visual_odometry import (
     _timestamped_files,
 )
 from src.common.config import RunConfig
-from src.common.models import Estimate, ImuSample, WheelMeasurement
+from src.common.models import (
+    Estimate,
+    ImuSample,
+    RelativeMotion,
+    RelativePoseEpoch,
+    WheelMeasurement,
+)
 
 
 @dataclass(frozen=True)
@@ -51,6 +57,36 @@ class VioTrajectoryResult:
     attempted_pairs: int
     visual_factors: int
     rejected_pairs: int
+
+
+def relative_measurements_from_vio(
+    states: list[Estimate],
+    config: RunConfig,
+) -> tuple[list[RelativeMotion], list[RelativePoseEpoch]]:
+    """Convert the VIO trajectory into body-frame pose factors for the EKF."""
+    motions: list[RelativeMotion] = []
+    epochs: list[RelativePoseEpoch] = []
+    for previous, current in zip(states, states[1:]):
+        dt_s = (current.timestamp_ns - previous.timestamp_ns) * 1e-9
+        if dt_s <= 0.0:
+            raise ValueError("VIO states must be strictly time ordered")
+        world_dx = current.x_m - previous.x_m
+        world_dy = current.y_m - previous.y_m
+        cosine, sine = math.cos(previous.yaw_rad), math.sin(previous.yaw_rad)
+        motions.append(
+            RelativeMotion(
+                timestamp_ns=current.timestamp_ns,
+                dt_s=dt_s,
+                dx_m=cosine * world_dx + sine * world_dy,
+                dy_m=-sine * world_dx + cosine * world_dy,
+                dyaw_rad=_wrap(current.yaw_rad - previous.yaw_rad),
+                source="vio",
+                translation_std_m=config.fusion.vio_translation_std_m,
+                yaw_std_rad=config.fusion.vio_yaw_std_rad,
+            )
+        )
+        epochs.append(RelativePoseEpoch(previous.timestamp_ns, "vio"))
+    return motions, epochs
 
 
 @dataclass

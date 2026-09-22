@@ -34,7 +34,7 @@ def gps_scenarios(
     wheels: list[WheelMeasurement],
     config: GpsConfig,
 ) -> dict[str, list[GpsMeasurement]]:
-    """Return full, route-distance dropout and 10x sparse streams."""
+    """Return full, route-distance dropout and configured sparse streams."""
     if not measurements:
         raise ValueError("GPS stream is empty")
     progress = _wheel_progress(measurements, wheels)
@@ -43,8 +43,16 @@ def gps_scenarios(
         for measurement, fraction in zip(measurements, progress)
         if not any(start <= fraction < end for start, end in config.dropout_ranges)
     ]
+    sparse: list[GpsMeasurement] = []
+    interval_ns = round(config.sparse_interval_s * 1e9)
+    next_timestamp_ns = measurements[0].timestamp_ns
+    for measurement in measurements:
+        if measurement.timestamp_ns < next_timestamp_ns:
+            continue
+        sparse.append(measurement)
+        next_timestamp_ns = measurement.timestamp_ns + interval_ns
     return {
         "gps": measurements,
         "gps_dropout": dropout,
-        "gps_sparse": measurements[:: config.sparse_factor],
+        "gps_sparse": sparse,
     }

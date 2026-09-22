@@ -48,9 +48,7 @@ class GpsConfig:
     min_position_std_m: float
     position_nis_threshold: float
     max_covariance_scale: float
-    sparse_factor: int
-    trajectory_translation_walk_m_sqrt_s: float
-    trajectory_yaw_walk_rad_sqrt_s: float
+    sparse_interval_s: float
     dropout_ranges: tuple[tuple[float, float], ...]
 
 
@@ -85,6 +83,8 @@ class VioConfig:
 
 @dataclass(frozen=True)
 class FusionConfig:
+    vio_translation_std_m: float
+    vio_yaw_std_rad: float
     relative_speed_nis_threshold: float
     relative_yaw_nis_threshold: float
     relative_pose_nis_threshold: float
@@ -180,9 +180,7 @@ def load_config(
             "initial_alignment_distance_m",
             "position_nis_threshold",
             "max_covariance_scale",
-            "sparse_factor",
-            "trajectory_translation_walk_m_sqrt_s",
-            "trajectory_yaw_walk_rad_sqrt_s",
+            "sparse_interval_s",
         ),
         config_path,
     )
@@ -240,6 +238,8 @@ def load_config(
         fusion,
         "fusion",
         (
+            "vio_translation_std_m",
+            "vio_yaw_std_rad",
             "relative_speed_nis_threshold",
             "relative_yaw_nis_threshold",
             "relative_pose_nis_threshold",
@@ -281,13 +281,7 @@ def load_config(
             min_position_std_m=float(gps["min_position_std_m"]),
             position_nis_threshold=float(gps["position_nis_threshold"]),
             max_covariance_scale=float(gps["max_covariance_scale"]),
-            sparse_factor=int(gps["sparse_factor"]),
-            trajectory_translation_walk_m_sqrt_s=float(
-                gps["trajectory_translation_walk_m_sqrt_s"]
-            ),
-            trajectory_yaw_walk_rad_sqrt_s=float(
-                gps["trajectory_yaw_walk_rad_sqrt_s"]
-            ),
+            sparse_interval_s=float(gps["sparse_interval_s"]),
             dropout_ranges=dropout_ranges,
         ),
         visual_odometry=VisualOdometryConfig(
@@ -316,6 +310,8 @@ def load_config(
             max_iterations=int(vio["max_iterations"]),
         ),
         fusion=FusionConfig(
+            vio_translation_std_m=float(fusion["vio_translation_std_m"]),
+            vio_yaw_std_rad=float(fusion["vio_yaw_std_rad"]),
             relative_speed_nis_threshold=float(fusion["relative_speed_nis_threshold"]),
             relative_yaw_nis_threshold=float(fusion["relative_yaw_nis_threshold"]),
             relative_pose_nis_threshold=float(fusion["relative_pose_nis_threshold"]),

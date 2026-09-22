@@ -27,9 +27,7 @@
     "min_position_std_m": 2.0,
     "position_nis_threshold": 9.21,
     "max_covariance_scale": 100.0,
-    "sparse_factor": 30,
-    "trajectory_translation_walk_m_sqrt_s": 0.2,
-    "trajectory_yaw_walk_rad_sqrt_s": 0.002,
+    "sparse_interval_s": 30.0,
     "dropout_ranges": [[0.2, 0.4], [0.5, 0.7]]
   },
   "visual_odometry": {
@@ -58,6 +56,8 @@
     "max_iterations": 15
   },
   "fusion": {
+    "vio_translation_std_m": 0.5,
+    "vio_yaw_std_rad": 0.03,
     "relative_speed_nis_threshold": 6.635,
     "relative_yaw_nis_threshold": 6.635,
     "relative_pose_nis_threshold": 11.345,

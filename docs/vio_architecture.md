@@ -56,6 +56,16 @@ absolute dataset path, image timestamps, IMU/wheel metadata, VIO config та
 frontend statistics. `--reuse-frontends` приймає cache лише за точного збігу
 manifest. Зміна sequence або tuning параметрів вимагає нового прогону.
 
+## Sparse GPS fusion
+
+У режимах `gps_dropout` і `gps_sparse` сусідні VIO states перетворюються на
+body-frame `dx, dy, dyaw` pose factors. Основний EKF одночасно обробляє ці
+factors, IMU, wheel measurements і доступні commercial GPS measurements.
+Sparse режим використовує одне GPS measurement кожні 30 с. GPS є position
+update того самого EKF state `[x, y, yaw, speed, gyro_bias, accel_bias]`, тому
+Kalman cross-covariance передає позиційну поправку також у velocity та IMU
+biases. Це замінює окрему постобробку готової траєкторії через SE(2).
+
 ## Обмеження
 
 - planar motion: немає roll, pitch, vertical velocity та gravity alignment;

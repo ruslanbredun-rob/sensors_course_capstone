@@ -3,15 +3,16 @@
 Курсовий проєкт для ДЗ 18–19 на Complex Urban Dataset. Реалізовано шість
 незалежних експериментів:
 
+- `gps`: reference configuration — IMU + колеса + всі commercial GPS measurements;
 - `base`: planar INS на IMU та колісній кінематиці;
-- `visual`: baseline з relative stereo VO corrections;
-- `vio`: IMU + колеса + feature-level stereo VIO.
-- `gps`: IMU + колеса + всі commercial GPS measurements;
-- `gps_dropout`: GPS відсутній на 20–40% та 50–70% пройденого шляху;
-- `gps_sparse`: VIO + колеса коригуються кожним 30-м GPS measurement.
+- `visual`: IMU + колеса + relative stereo VO corrections;
+- `vio`: IMU + колеса + feature-level stereo VIO;
+- `gps_dropout`: IMU + колеса + VIO, GPS відсутній на 20–40% та 50–70% шляху;
+- `gps_sparse`: IMU + колеса + VIO та одне commercial GPS measurement кожні 30 с.
 
-Commercial `gps.csv` входить лише у три GPS режими. VRS-GPS ніколи не входить
-в estimator і використовується лише для оцінки готової траєкторії.
+Commercial `gps.csv` входить лише у три GPS режими. Назва reference
+configuration означає повний доступ до commercial GPS. VRS-GPS ніколи не
+входить в estimator і використовується лише як ground truth для оцінки.
 
 ## Середовище
 
@@ -69,7 +70,9 @@ Pipeline створює:
 - `comparison_metrics.csv` і `rtk_segment_metrics.csv`;
 - `estimated_state_<mode>.csv`;
 - `vio_trajectory.csv` та `vio_manifest.json`;
-- `screenshots/trajectory_comparison.png` та інші графіки.
+- `screenshots/trajectory_gps_reference.png`, `trajectory_vio.png` і
+  `trajectory_degraded_gps.png`;
+- error, RMSE та diagnostics графіки.
 
 Поточні VIO результати треба отримати новим прогоном: старий motion-factor VIO cache
 несумісний із feature-level estimator. Архітектура описана у

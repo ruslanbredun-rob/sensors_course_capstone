@@ -15,12 +15,12 @@ from src.evaluation.metrics import PositionEvaluation
 
 
 DISPLAY_NAMES = {
-    "base": "INS baseline (IMU + wheel)",
-    "visual": "Baseline + stereo VO",
-    "vio": "Stereo VIO + wheels",
-    "gps": "Commercial GPS",
-    "gps_dropout": "GPS dropout (20–40%, 50–70%)",
-    "gps_sparse": "VIO + wheels + GPS at 1/30 rate",
+    "gps": "Reference config: GPS + IMU + wheels",
+    "base": "IMU + wheels",
+    "visual": "IMU + wheels + stereo VO",
+    "vio": "IMU + wheels + stereo VIO",
+    "gps_dropout": "IMU + wheels + VIO + GPS dropout",
+    "gps_sparse": "IMU + wheels + VIO + GPS every 30 s",
 }
 
 
@@ -59,7 +59,10 @@ def save_validation_plot(result: PositionEvaluation, output_path: Path) -> None:
 
 
 def _save_trajectory_comparison(
-    evaluations: dict[str, PositionEvaluation], output_path: Path
+    evaluations: dict[str, PositionEvaluation],
+    names: tuple[str, ...],
+    output_path: Path,
+    title: str,
 ) -> None:
     first = next(iter(evaluations.values()))
     origin = first.reference_xy_m[0]
@@ -75,7 +78,10 @@ def _save_trajectory_comparison(
         label="VRS-GPS RTK reference",
         zorder=1,
     )
-    for name, result in evaluations.items():
+    for name in names:
+        if name not in evaluations:
+            continue
+        result = evaluations[name]
         estimate = result.start_aligned_xy_m - origin
         axis.plot(
             estimate[:, 0],
@@ -106,7 +112,7 @@ def _save_trajectory_comparison(
     )
     axis.set(xlabel="UTM east offset (m)", ylabel="UTM north offset (m)")
     axis.set_aspect("equal", adjustable="box")
-    axis.set_title("All trajectories aligned to the common initial pose (20 m heading)")
+    axis.set_title(title)
     axis.grid(True, alpha=0.3)
     axis.legend(fontsize=8)
     _save_figure(figure, output_path)
@@ -165,7 +171,22 @@ def save_comparison_plots(
     """Write trajectory, error-over-time and RMSE comparison screenshots."""
     output_directory.mkdir(parents=True, exist_ok=True)
     _save_trajectory_comparison(
-        evaluations, output_directory / "trajectory_comparison.png"
+        evaluations,
+        ("gps",),
+        output_directory / "trajectory_gps_reference.png",
+        "GPS-aided reference configuration vs VRS-GPS ground truth",
+    )
+    _save_trajectory_comparison(
+        evaluations,
+        ("vio",),
+        output_directory / "trajectory_vio.png",
+        "GPS-denied VIO vs VRS-GPS ground truth",
+    )
+    _save_trajectory_comparison(
+        evaluations,
+        ("gps_dropout", "gps_sparse"),
+        output_directory / "trajectory_degraded_gps.png",
+        "Degraded GPS availability vs VRS-GPS ground truth",
     )
     _save_error_comparison(evaluations, output_directory / "error_over_time.png")
     _save_rmse_comparison(evaluations, output_directory / "rmse_comparison.png")

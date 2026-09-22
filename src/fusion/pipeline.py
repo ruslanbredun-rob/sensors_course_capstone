@@ -17,6 +17,7 @@ from src.camera.vio import (
     VioTrajectoryResult,
     compute_vio_trajectory,
     read_vio_trajectory,
+    relative_measurements_from_vio,
 )
 from src.common.config import RunConfig
 from src.common.models import (
@@ -35,7 +36,6 @@ from src.evaluation.metrics import PositionEvaluation, evaluate_position
 from src.fusion.ekf import VehicleEKF
 from src.gps.reader import read_gps
 from src.gps.scenarios import gps_scenarios
-from src.gps.trajectory_fusion import fuse_sparse_gps_with_vio
 from src.imu.reader import read_imu
 from src.wheel.odometry import (
     wheel_measurements,
@@ -84,7 +84,7 @@ def _require_inputs(dataset: Path, *, mode: str, validate: bool) -> None:
                 dataset / "calibration" / "Vehicle2VRS.txt",
             )
         )
-    if mode in ("visual", "vio", "gps_sparse", "all"):
+    if mode in ("visual", "vio", "gps_dropout", "gps_sparse", "all"):
         required.extend(
             (
                 dataset / "calibration" / "left.yaml",
@@ -222,6 +222,8 @@ def _run_filter(
                 "covariance_scale",
                 "accepted",
                 "update_kind",
+                "gyro_bias_rad_s",
+                "accel_bias_m_s2",
             )
         )
         streams = [imu, wheels]
@@ -264,6 +266,7 @@ def _run_filter(
                     raise ValueError("GPS stream requires an antenna offset")
                 gps_available += 1
                 estimator.update_gps(event, gps_antenna_offset_xy_m)
+                gyro_bias, accel_bias = estimator.imu_biases
                 gps_count += int(estimator.last_gps_update_kind == "position")
                 rejected_gps += int(estimator.last_gps_update_kind == "rejected")
                 gps_writer.writerow(
@@ -279,6 +282,8 @@ def _run_filter(
                         else f"{estimator.last_gps_covariance_scale:.6f}",
                         estimator.last_gps_accepted,
                         estimator.last_gps_update_kind,
+                        f"{gyro_bias:.9f}",
+                        f"{accel_bias:.9f}",
                     )
                 )
             elif isinstance(event, RelativePoseEpoch):
@@ -434,7 +439,7 @@ def run(
             f"fusion={'enabled' if visual_ready else 'disabled (low coverage)'}"
         )
     vio: VioTrajectoryResult | None = None
-    if mode in ("vio", "gps_sparse", "all"):
+    if mode in ("vio", "gps_dropout", "gps_sparse", "all"):
         vio = (
             read_vio_trajectory(config)
             if reuse_frontends and (config.general.output / "vio_trajectory.csv").exists()
@@ -447,11 +452,15 @@ def run(
         )
 
     filter_modes = (
-        ["base", "visual", "gps", "gps_dropout"]
+        ["gps", "base", "visual", "gps_dropout", "gps_sparse"]
         if mode == "all"
-        else ([] if mode in ("vio", "gps_sparse") else [mode])
+        else ([] if mode == "vio" else [mode])
     )
     results: list[ExperimentResult] = []
+    vio_motions: list[RelativeMotion] = []
+    vio_epochs: list[RelativePoseEpoch] = []
+    if vio is not None:
+        vio_motions, vio_epochs = relative_measurements_from_vio(vio.states, config)
     for name in filter_modes:
         if name == "vio":
             continue
@@ -460,6 +469,9 @@ def run(
         if name == "visual" and visual and visual_ready:
             relative_streams.append(visual.motions)
             relative_epoch_streams.append(visual.epochs)
+        if name in ("gps_dropout", "gps_sparse"):
+            relative_streams.append(vio_motions)
+            relative_epoch_streams.append(vio_epochs)
         results.append(
             _run_filter(
                 config,
@@ -488,38 +500,11 @@ def run(
                 available_relative_updates=vio.attempted_pairs,
             )
         )
-    if mode in ("gps_sparse", "all"):
-        if vio is None or gps_antenna_offset_xy_m is None:
-            raise ValueError("Sparse GPS mode requires VIO and GPS calibration")
-        sparse = fuse_sparse_gps_with_vio(
-            config,
-            vio.states,
-            gps_streams["gps_sparse"],
-            gps_antenna_offset_xy_m,
-        )
-        _write_estimates(
-            config.general.output / "estimated_state_gps_sparse.csv",
-            sparse.states,
-        )
-        results.append(
-            ExperimentResult(
-                "gps_sparse",
-                sparse.states,
-                wheel_updates=len(wheels),
-                rejected_wheel_updates=0,
-                relative_updates=vio.visual_factors,
-                rejected_relative_updates=vio.rejected_pairs,
-                available_relative_updates=vio.attempted_pairs,
-                gps_updates=sparse.updates,
-                rejected_gps_updates=sparse.rejected_updates,
-                available_gps_updates=sparse.available_updates,
-            )
-        )
     if mode == "all":
         order = {
             name: index
             for index, name in enumerate(
-                ("base", "visual", "vio", "gps", "gps_dropout", "gps_sparse")
+                ("gps", "base", "visual", "vio", "gps_dropout", "gps_sparse")
             )
         }
         results.sort(key=lambda result: order[result.name])

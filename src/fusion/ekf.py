@@ -139,6 +139,11 @@ class VehicleEKF:
     def current_imu(self) -> ImuSample | None:
         return self._imu
 
+    @property
+    def imu_biases(self) -> tuple[float, float]:
+        """Return the current gyro-z and forward-acceleration bias estimates."""
+        return float(self.x[4]), float(self.x[5])
+
     def _scalar_update(
         self,
         residual: float,

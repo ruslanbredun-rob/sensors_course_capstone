@@ -4,12 +4,12 @@
 
 | Режим | Estimator | Сенсори |
 |---|---|---|
+| `gps` | Reference configuration, planar EKF | IMU + wheels + усі commercial GPS measurements |
 | `base` | Planar EKF | IMU + wheel encoders |
 | `visual` | Planar EKF з pose-clone update | IMU + wheels + stereo VO |
 | `vio` | Sliding-window nonlinear optimization | IMU + wheels + stereo features |
-| `gps` | Planar EKF | IMU + wheels + commercial GPS |
-| `gps_dropout` | Planar EKF | GPS вимкнено на 20–40% та 50–70% шляху |
-| `gps_sparse` | VIO trajectory correction | IMU + wheels + camera + кожне 30-те GPS measurement |
+| `gps_dropout` | VIO pose factors + EKF | IMU + wheels + camera; GPS вимкнено на 20–40% та 50–70% шляху |
+| `gps_sparse` | VIO pose factors + EKF | IMU + wheels + camera + одне GPS measurement кожні 30 с |
 | `all` | Запускає шість конфігурацій для порівняння | усі перелічені вище |
 
 VIO є окремою траєкторією. IMU та колеса утворюють motion backbone, а camera
@@ -33,6 +33,8 @@ flowchart LR
     FEAT --> WIN[Sliding-window VIO]
     PRE --> WIN
     WPRE --> WIN
+    WIN --> VREL[Body-frame VIO pose factors]
+    VREL --> EKF
 
     EKF --> EVAL[VRS-only evaluation]
     WIN --> EVAL
@@ -81,8 +83,12 @@ VRS. `Vehicle2GPS.txt` компенсує antenna lever arm. Position update з�
 adaptive covariance inflation за NIS.
 
 Dropout progress визначається за накопиченою абсолютною wheel distance. Sparse
-режим бере VIO + wheel trajectory як backbone і оцінює повільну SE(2) correction
-за кожним 30-м GPS measurement.
+режим вибирає перше доступне GPS measurement після кожного 30-секундного
+інтервалу. В обох degraded GPS режимах кожна GPS позиція входить безпосередньо
+в EKF разом із body-frame pose factors, отриманими з VIO trajectory. GPS
+innovation оновлює весь корельований state, включно зі швидкістю та IMU biases.
+`gps` використовується як reference configuration з повною доступністю
+commercial GPS; незалежний VRS-GPS лишається ground truth.
 
 ## Оцінка
 
