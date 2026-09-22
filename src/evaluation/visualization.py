@@ -82,14 +82,14 @@ def _save_trajectory_comparison(
         if name not in evaluations:
             continue
         result = evaluations[name]
-        estimate = result.aligned_xy_m - origin
+        estimate = result.start_aligned_xy_m - origin
         axis.plot(
             estimate[:, 0],
             estimate[:, 1],
             linewidth=1.5,
             label=(
                 f"{DISPLAY_NAMES.get(name, name)} "
-                f"(ATE {result.rmse_m:.2f} m)"
+                f"(initial-pose RMSE {result.start_rmse_m:.2f} m)"
             ),
         )
     axis.scatter(
@@ -101,10 +101,10 @@ def _save_trajectory_comparison(
         edgecolor="white",
         linewidth=0.9,
         zorder=10,
-        label="VRS-GPS start",
+        label="Common start",
     )
     axis.annotate(
-        "VRS start (0, 0)",
+        "start (0, 0)",
         (0.0, 0.0),
         xytext=(10, 10),
         textcoords="offset points",
@@ -174,19 +174,19 @@ def save_comparison_plots(
         evaluations,
         ("gps",),
         output_directory / "trajectory_gps_reference.png",
-        "GPS reference vs VRS-GPS after Global SE(2) alignment",
+        "GPS reference vs VRS-GPS after initial-pose alignment",
     )
     _save_trajectory_comparison(
         evaluations,
         ("vio",),
         output_directory / "trajectory_vio.png",
-        "GPS-denied VIO vs VRS-GPS after Global SE(2) alignment",
+        "GPS-denied VIO vs VRS-GPS after initial-pose alignment",
     )
     _save_trajectory_comparison(
         evaluations,
         ("gps_dropout", "gps_sparse"),
         output_directory / "trajectory_degraded_gps.png",
-        "Degraded GPS modes after Global SE(2) alignment",
+        "Degraded GPS modes after initial-pose alignment",
     )
     _save_error_comparison(evaluations, output_directory / "error_over_time.png")
     _save_rmse_comparison(evaluations, output_directory / "rmse_comparison.png")
